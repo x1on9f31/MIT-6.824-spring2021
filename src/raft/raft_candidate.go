@@ -40,6 +40,7 @@ func (rf *Raft) goElection(term int, args *RequestVoteArgs) {
 				}
 
 				rf.votes++
+				Logger(dVote, "S%d term %d recv vote from S%d, votes %d\n", rf.me, term, peer, rf.votes)
 				if rf.votes >= rf.major {
 					rf.beforeBeNewLeader()
 					go rf.doLeaderThing(rf.currentTerm)

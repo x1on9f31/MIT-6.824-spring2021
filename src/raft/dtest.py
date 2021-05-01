@@ -150,6 +150,12 @@ def run_tests(
         print(f"[yellow] Verbosity level set to {verbose}[/yellow]")
         os.environ['VERBOSE'] = str(verbose)
 
+    # test_cmd = ["go", "test", f"-run={test}"]
+    # if race:
+    #     test_cmd.append("-race")
+    # if timing:
+    #     test_cmd = ["time"] + cmd
+
     while True:
 
         total = iterations * len(tests)

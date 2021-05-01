@@ -43,8 +43,8 @@ const (
 
 	ELECTION_TIMEOUT = 800 * time.Millisecond
 	//LEADER_TIMEOUT = 1000 * time.Millisecond
-	RANDOM_PLUS    = 200 * time.Millisecond
-	HEART_INTERVAL = 300 * time.Millisecond
+	RANDOM_PLUS    = 300 * time.Millisecond
+	HEART_INTERVAL = 200 * time.Millisecond
 )
 
 func AssertTrue(test bool, format string, a ...interface{}) {
@@ -619,6 +619,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 // should call killed() to check whether it should stop.
 //
 func (rf *Raft) Kill() {
+	Logger(dLog3, "S%d killed########################\n\n", rf.me)
 	atomic.StoreInt32(&rf.dead, 1)
 	// Your code here, if desired.
 }

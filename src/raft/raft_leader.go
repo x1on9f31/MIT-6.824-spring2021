@@ -2,9 +2,20 @@ package raft
 
 import (
 	"fmt"
+	// "net/http"
+	// _ "net/http/pprof"
 	"sort"
 	"time"
 )
+
+// func init() {
+// 	go func() {
+// 		err := http.ListenAndServe(":9999", nil)
+// 		if err != nil {
+// 			panic(err)
+// 		}
+// 	}()
+// }
 
 func (rf *Raft) doLeaderThing(term int) {
 	rf.mu.Lock()
@@ -109,19 +120,21 @@ func getKth(c []int, k int) int {
 //hold lock ,role:LEADER
 func (rf *Raft) appendOkAsLeader(nextIndex, server int, isAppend bool) {
 	if isAppend {
-		Logger(dLeader, "S%d leader append ok term %d to server %d,nextIndex %d\n",
+		Logger(dLeader, "S%d term %d leader append ok to S%d,nextIndex %d\n",
 			rf.me, rf.currentTerm, server, nextIndex)
 	} else {
-		Logger(dLeader, "S%d leader install ok term %d tos erver %d,nextIndex %d\n",
+		Logger(dLeader, "S%d term %d leader install ok to S%d,nextIndex %d\n",
 			rf.me, rf.currentTerm, server, nextIndex)
 	}
 	AssertTrue(rf.nextIndex[server] > rf.matchIndex[server], "term %d for S%d next %d match %d\n",
 		rf.me, server, rf.nextIndex[server], rf.matchIndex[server])
 
-	if rf.matchIndex[server] >= nextIndex-1 {
-		Logger(dLeader, "S%d leader try to next %d but match is %d\n ",
-			rf.me, nextIndex, rf.matchIndex[server])
+	if rf.matchIndex[server] > nextIndex-1 {
+		Logger(dLeader, "S%d term %d leader reject append ok: next %d, match %d\n ",
+			rf.me, rf.currentTerm, nextIndex, rf.matchIndex[server])
 		return
+	} else if rf.matchIndex[server] == nextIndex-1 {
+		Logger(dLeader, "S%d term %d leader recv S%d heart %d reply\n", rf.me, rf.currentTerm, server, nextIndex-1)
 	}
 
 	rf.nextIndex[server] = nextIndex
@@ -188,7 +201,7 @@ func (rf *Raft) doInstallRPC(server, term int, args *InstallSnapArgs) {
 		Term: 0,
 	}
 
-	Logger(dLeader, "S%d term %d leader send snap to %d,offset %d\n", rf.me,
+	Logger(dLeader, "S%d term %d leader install snap to S%d,offset %d\n", rf.me,
 		rf.currentTerm, server, rf.offset)
 
 	ok := rf.peers[server].Call("Raft.InstallSnapshot", args, &reply)
@@ -237,21 +250,19 @@ func (rf *Raft) checkAppendRPC(term, server int, reply *AppendReply) {
 	expectNextIndex := rf.getNextIndex(reply.XTerm, reply.XIndex, reply.XLen)
 
 	if rf.matchIndex[server] >= expectNextIndex { //过时了，拒绝回退
-		Logger(dLeader, "S%d leader try to next %d but match is %d\n ",
-			rf.me, expectNextIndex, rf.matchIndex[server])
+		Logger(dLeader, "S%d term %d leader reject append conflict,next %d but match is %d\n ",
+			rf.me, rf.currentTerm, expectNextIndex, rf.matchIndex[server])
 		return
 	}
-	AssertTrue(expectNextIndex > rf.matchIndex[server], "term %d update for S%d next %d match %d\n",
-		rf.me, server, expectNextIndex, rf.matchIndex[server])
 
 	rf.nextIndex[server] = expectNextIndex
-	Logger(dLeader, "S%d term %d leader updated %d's nextIndex to %d \n",
+	Logger(dLeader, "S%d term %d leader updated S%d nextIndex to %d \n",
 		rf.me, rf.currentTerm, server, expectNextIndex)
 
 }
 
 func (rf *Raft) doAppendRPC(server, term int, args *AppendArgs) {
-	Logger(dLeader, "S%d term %d leader append to %d [%d->%d)\n", rf.me,
+	Logger(dLeader, "S%d term %d leader append to S%d [%d->%d)\n", rf.me,
 		rf.currentTerm, server, args.PrevLogIndex+1, args.PrevLogIndex+len(args.Entries)+1)
 
 	reply := AppendReply{

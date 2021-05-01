@@ -543,13 +543,13 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 				time.Sleep(20 * time.Millisecond)
 			}
 			if retry == false {
-				cfg.t.Fatalf("one(%v) index %d failed to reach agreement with leader", cmd, index)
+				cfg.t.Fatalf("one(%v) index %d failed to reach agreement with leader %v", cmd, index, cfg.logs)
 			}
 		} else {
 			time.Sleep(50 * time.Millisecond)
 		}
 	}
-	cfg.t.Fatalf("one(%v) failed to reach agreement", cmd)
+	cfg.t.Fatalf("one(%v) failed to reach agreement %v", cmd, cfg.logs)
 	return -1
 }
 
