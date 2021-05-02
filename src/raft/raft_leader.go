@@ -224,7 +224,9 @@ func (rf *Raft) checkInstallRPC(term, server, nextIndex int, reply *InstallSnapR
 	if rf.currentTerm != term || rf.role != LEADER || reply.Term < rf.currentTerm {
 		return
 	}
-
+	if nextIndex <= rf.matchIndex[server] {
+		return
+	}
 	rf.nextIndex[server] = nextIndex
 }
 

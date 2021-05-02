@@ -587,11 +587,11 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	isLeader := true
 
 	rf.mu.Lock()
-	defer rf.mu.Unlock()
 
 	term = rf.currentTerm
 	isLeader = rf.role == LEADER
 	if !isLeader || rf.killed() {
+		rf.mu.Unlock()
 		return 0, term, false
 	}
 	term = rf.currentTerm
@@ -602,8 +602,13 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	})
 	index = rf.lastLogIndex
 	Logger(dClient, "S%d term %d request of index %d\n", rf.me, term, index)
+	rf.mu.Unlock()
 
-	rf.clientReqCond.Broadcast()
+	go func() {
+		time.Sleep(3 * time.Millisecond)
+		rf.clientReqCond.Broadcast()
+	}()
+
 	return index, term, true
 }
 
