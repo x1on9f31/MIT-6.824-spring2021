@@ -43,7 +43,7 @@ func (rf *Raft) sleepTimeout() {
 //with lock
 func (rf *Raft) freshTimer() {
 	rf.timerLock.Lock()
-	Logger(dTimer, "S%d timer freshed\n", rf.me)
+	rf.DTimer("timer freshed\n")
 	defer rf.timerLock.Unlock()
 	rf.timeDdl = time.Now().Add(getRandomElectionTimeout())
 }

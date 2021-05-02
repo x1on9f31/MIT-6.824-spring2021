@@ -1,37 +1,11 @@
 package raft
 
-//todo ...
-//recover logs,  leader kickout, append log 长度
-//append retry 机制
-// write command to applt chan,then maintain a apply index and a command index
-
-//
-// this is an outline of the API that raft must expose to
-// the service (or tester). see comments below for
-// each of these functions for more details.
-//
-// rf = Make(...)
-//   create a new Raft server.
-// rf.Start(command interface{}) (index, term, isleader)
-//   start agreement on a new log entry
-// rf.GetState() (term, isLeader)
-//   ask a Raft for its current term, and whether it thinks it is leader
-// ApplyMsg
-//   each time a new entry is committed to the log, each Raft peer
-//   should send an ApplyMsg to the service (or tester)
-//   in the same server.
-//
-
 import (
-	//	"bytes"
-
 	"bytes"
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	//	"6.824/labgob"
 	"6.824/labgob"
 	"6.824/labrpc"
 )
@@ -42,28 +16,10 @@ const (
 	LEADER    = 2
 
 	ELECTION_TIMEOUT = 800 * time.Millisecond
-	//LEADER_TIMEOUT = 1000 * time.Millisecond
-	RANDOM_PLUS    = 200 * time.Millisecond
-	HEART_INTERVAL = 300 * time.Millisecond
+	RANDOM_PLUS      = 200 * time.Millisecond
+	HEART_INTERVAL   = 300 * time.Millisecond
 )
 
-func AssertTrue(test bool, format string, a ...interface{}) {
-	if !test {
-		panic(fmt.Sprintf("S%d "+format, a...))
-	}
-}
-
-//
-// as each Raft peer becomes aware that successive log entries are
-// committed, the peer should send an ApplyMsg to the service (or
-// tester) on the same server, via the applyCh passed to Make(). set
-// CommandValid to true to indicate that the ApplyMsg contains a newly
-// committed log entry.
-//
-// in part 2D you'll want to send other kinds of messages (e.g.,
-// snapshots) on the applyCh, but set CommandValid to false for these
-// other uses.
-//
 type ApplyMsg struct {
 	CommandValid bool
 	Command      interface{}
@@ -80,44 +36,38 @@ type LogEntry struct {
 	Command interface{}
 }
 
-//
-// A Go object implementing a single Raft peer.
-//
 type Raft struct {
-	//init need not persisit
-	mu        sync.Mutex          // Lock to protect shared access to this peer's state
-	peers     []*labrpc.ClientEnd // RPC end points of all peers
-	persister *Persister          // Object to hold this peer's persisted state
-	me        int                 // this peer's index into peers[]
-	major     int
-	peerCnt   int
-
-	//protected by atomic
-	dead    int32 // set by Kill()
-	applyCh chan ApplyMsg
-	// Your data here (2A, 2B, 2C).
-	// Look at the paper's Figure 2 for a description of what
-	// state a Raft server must maintain.
-	snapshot      []byte
+	//initialized, and won't change until restart
+	mu            sync.Mutex          // Lock to protect shared access to this peer's state
+	peers         []*labrpc.ClientEnd // RPC end points of all peers
+	persister     *Persister          // Object to hold this peer's persisted state
+	me            int                 // this peer's index into peers[]
+	major         int
+	peerCnt       int
+	applyCh       chan ApplyMsg
 	applyCond     *sync.Cond
 	clientReqCond *sync.Cond
 	timerLock     sync.Mutex
+
+	//protected by atomic
+	dead int32 // set by Kill()
+
 	//volatile
-	role        int
+	snapshot    []byte
+	role        int //FOLLOWER = 0, CANDIDATE = 1, LEADER = 2
 	commitIndex int
 	lastApplied int
-	timeDdl     time.Time //for follower and candidate
+	timeDdl     time.Time //time to timeout
 	votes       int
-	//volatile for leader,every election re-init
+	//volatile for leader's every election, which means re-init
 	nextIndex  []int
 	matchIndex []int
 
-	//persist !!!!!!!!!!!!
-	currentTerm int //2a
-	votedFor    int //2a
-	logs        []LogEntry
-	//persist, recover from crash, modified by some functions
-	offset       int //known as snapLastIncludeIndex + 1
+	//persisted
+	currentTerm  int
+	votedFor     int
+	logs         []LogEntry //log[0].Term saves lastIncludedTerm
+	offset       int        // = lastIncludedIndex + 1
 	lastLogIndex int
 }
 
@@ -137,8 +87,9 @@ func (rf *Raft) GetState() (int, bool) {
 
 //hold lock
 func (rf *Raft) doPersistRaftAndSnap(index, term int, snapshot []byte) {
-	Logger(dSnap, "S%v term %d apply snapshot offset %d->%d \n",
-		rf.me, rf.currentTerm, rf.offset, index)
+
+	rf.DSnap("term %d apply snapshot offset %d->%d \n",
+		rf.currentTerm, rf.offset, index)
 
 	if index > rf.commitIndex {
 		rf.commitIndex = index
@@ -147,12 +98,12 @@ func (rf *Raft) doPersistRaftAndSnap(index, term int, snapshot []byte) {
 		rf.lastApplied = index
 	}
 	length_after_trim := rf.lastLogIndex - index + 1
-	if length_after_trim < 1 { //说明index更长
+	if length_after_trim < 1 {
 		length_after_trim = 1
 		rf.logs = make([]LogEntry, 1)
 	} else {
 		newLogs := make([]LogEntry, length_after_trim)
-		copy(newLogs, rf.logs[index-rf.offset:]) //多保留一个位置
+		copy(newLogs, rf.logs[index-rf.offset:]) //log[0].Term saves lastIncludedTerm
 		rf.logs = newLogs
 	}
 	if index > rf.lastLogIndex {
@@ -176,27 +127,16 @@ func (rf *Raft) getRaftState() []byte {
 	return w.Bytes()
 }
 
-//
-// save Raft's persistent state to stable storage,
-// where it can later be retrieved after a crash and restart.
-// see paper's Figure 2 for a description of what should be persistent.
-
-//hold rf.mu.lock
+//hold lock
 func (rf *Raft) persist() {
-	// Your code here (2C).
-	// Example
 	rf.persister.SaveRaftState(rf.getRaftState())
 }
 
-//
-// restore previously persisted state.
-//
 func (rf *Raft) readPersist(data []byte) {
 	if data == nil || len(data) < 1 { // bootstrap without any state?
 		return
 	}
-	// Your code here (2C).
-	// Example:
+
 	r := bytes.NewBuffer(data)
 	d := labgob.NewDecoder(r)
 	var currentTerm, votedFor, offset, lastLogIndex int
@@ -205,18 +145,18 @@ func (rf *Raft) readPersist(data []byte) {
 		d.Decode(&votedFor) != nil ||
 		d.Decode(&offset) != nil ||
 		d.Decode(&lastLogIndex) != nil {
-		Logger(dError, "S%d read persist error\n", rf.me)
+		rf.DPersist("read persist error\n")
 	} else {
 		logs := make([]LogEntry, lastLogIndex-offset)
 		if d.Decode(&logs) != nil {
-			Logger(dError, "S%d read persist logs error\n", rf.me)
+			rf.DPersist("read persist logs error\n")
 		} else {
 			rf.currentTerm = currentTerm
 			rf.votedFor = votedFor
 			rf.offset = offset
 			rf.lastLogIndex = lastLogIndex
 			rf.logs = logs
-			Logger(dPersist, "S%d read persist ok\n", rf.me)
+			rf.DPersist("read persist ok\n")
 		}
 	}
 }
@@ -229,16 +169,16 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 
 	//Your code here (2D).
 	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
 	if rf.lastApplied >= lastIncludedIndex {
-		rf.mu.Unlock()
-		Logger(dSnap, "S%v cond install false lastApplied:%d includeIndex:%d\n",
-			rf.me, rf.lastApplied, lastIncludedIndex)
+		rf.DSnap("cond install false lastApplied:%d includeIndex:%d\n",
+			rf.lastApplied, lastIncludedIndex)
 		return false
 	}
-	Logger(dSnap, "S%v cond install return true lastApplied:%d includeIndex:%d\n",
-		rf.me, rf.lastApplied, lastIncludedIndex)
+	rf.DSnap("cond install return true lastApplied:%d includeIndex:%d\n",
+		rf.lastApplied, lastIncludedIndex)
 	rf.doPersistRaftAndSnap(lastIncludedIndex, lastIncludedTerm, snapshot)
-	rf.mu.Unlock()
 	return true
 }
 
@@ -259,33 +199,31 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapArgs, reply *InstallSnapReply) 
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	defer func() { reply.Term = rf.currentTerm }()
-
+	rf.DSnap("term %d recv term %d installSnap:%d, myLast:%d\n",
+		rf.currentTerm, args.Term, args.LastIncludedIndex, rf.lastLogIndex)
 	if args.Term < rf.currentTerm {
 		return
 	}
 
-	//大term leader
+	//higher term leader
 	if args.Term > rf.currentTerm {
 		rf.toHigherTermWithLock(args.Term)
 	}
 	rf.role = FOLLOWER
 	rf.freshTimer()
-	//snapshot 本身一定一致，其内容（非本身）一定可以apply
-	//承诺一定会apply到snap之后（未必安装snap）
 
-	Logger(dSnap, "S%d recv install index:%d last%d\n", rf.me, args.LastIncludedIndex, rf.lastLogIndex)
 	reply.Term = rf.currentTerm
 	if rf.lastApplied >= args.LastIncludedIndex {
 
-		Logger(dSnap, "S%d applied %d ignore install index %d \n",
-			rf.me, args.LastIncludedIndex, rf.lastApplied)
+		rf.DSnap("ignore install index %d for applied %d\n",
+			rf.lastApplied, args.LastIncludedIndex)
 		return
 	}
 
 	rf.freshTimer()
 	go func() {
-		Logger(dSnap, "S%d write snap to chan index %d\n",
-			rf.me, args.LastIncludedIndex)
+		rf.DSnap("write snap to chan index %d\n",
+			args.LastIncludedIndex)
 		rf.applyCh <- ApplyMsg{
 			CommandValid:  false,
 			SnapshotValid: true,
@@ -304,7 +242,7 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapArgs, reply *InstallSnapReply) 
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	// Your code here (2D).
 	rf.mu.Lock()
-	Logger(dSnap, "S%d term %d service snap, logs -> [%d->%d]\n", rf.me, rf.currentTerm, index+1, rf.lastLogIndex)
+	rf.DSnap("term %d service snap, logs -> [%d->%d]\n", rf.currentTerm, index+1, rf.lastLogIndex)
 
 	term := rf.logs[index-rf.offset].Term
 	rf.doPersistRaftAndSnap(index, term, snapshot)
@@ -348,9 +286,10 @@ func isNewEnough(selfTerm, otherTerm, selfIndex, otherIndex int) bool {
 
 //hold lock
 func (rf *Raft) deleteTailLogs(from int) {
-	AssertTrue(from > 0 && from <= rf.lastLogIndex,
-		"from:%d lastLog:%d\n", rf.me, from, rf.lastLogIndex)
-	Logger(dLog1, "S%d term %d delete logs [%d->%d]\n", rf.me, rf.currentTerm, rf.lastLogIndex, from-1)
+	rf.AssertTrue(from > 0 && from <= rf.lastLogIndex,
+		"from:%d lastLog:%d\n", from, rf.lastLogIndex)
+
+	rf.DLog1("term %d delete logs [%d->%d]\n", rf.currentTerm, rf.lastLogIndex, from-1)
 	rf.logs = append([]LogEntry{}, rf.logs[:from-rf.offset]...)
 	rf.lastLogIndex = from - 1
 	rf.persist()
@@ -360,7 +299,7 @@ func (rf *Raft) deleteTailLogs(from int) {
 func (rf *Raft) appendLogs(logs []LogEntry) {
 
 	rf.lastLogIndex += len(logs)
-	Logger(dLog1, "S%d term %d + %d logs [tail->%d]\n", rf.me, rf.currentTerm, len(logs), rf.lastLogIndex)
+	rf.DLog1("term %d ++%d logs [tail->%d]\n", rf.currentTerm, len(logs), rf.lastLogIndex)
 	rf.logs = append(rf.logs, logs...)
 	rf.persist()
 }
@@ -368,7 +307,7 @@ func (rf *Raft) appendLogs(logs []LogEntry) {
 //hold lock
 func (rf *Raft) appendLog(log LogEntry) {
 	rf.lastLogIndex += 1
-	Logger(dLog1, "S%d term %d + 1 log [tail->%d]\n", rf.me, rf.currentTerm, rf.lastLogIndex)
+	rf.DLog1("term %d ++1 log [tail->%d]\n", rf.currentTerm, rf.lastLogIndex)
 	rf.logs = append(rf.logs, log)
 	rf.persist()
 }
@@ -378,6 +317,9 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	defer func() { reply.Term = rf.currentTerm }()
+	rf.DVote("term %d recv term %d voteReq to S%d \n",
+		rf.currentTerm, args.Term, args.CandidateId)
+
 	if args.Term < rf.currentTerm {
 		reply.VoteGranted = false
 		return
@@ -388,8 +330,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	}
 	if rf.role == LEADER {
 		reply.VoteGranted = false
-		Logger(dLeader, "S%d term %d leader reject vote to S%d\n",
-			rf.me, rf.currentTerm, args.CandidateId)
+		rf.DVote("term %d as leader reject to vote S%d\n",
+			rf.currentTerm, args.CandidateId)
 		return
 	}
 
@@ -403,17 +345,17 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		reply.VoteGranted = true
 		rf.freshTimer()
 		rf.votedFor = args.CandidateId
-		Logger(dVote, "S%d term %d vote to S%d \n",
-			rf.me, rf.currentTerm, args.CandidateId)
+		rf.DVote("term %d vote to S%d \n",
+			rf.currentTerm, args.CandidateId)
 		rf.persist()
 	} else {
 		reply.VoteGranted = false
 		if rf.votedFor != -1 {
-			Logger(dVote, "S%d term %d decline S%d for voted S%d \n",
-				rf.me, rf.currentTerm, args.CandidateId, rf.votedFor)
+			rf.DVote("term %d reject to vote S%d for voted S%d\n",
+				rf.currentTerm, args.CandidateId, rf.votedFor)
 		} else {
-			Logger(dVote, "S%d term %d decline S%d not new self[t%d,i%d] his[t%d,i%d] \n",
-				rf.me, rf.currentTerm, args.CandidateId,
+			rf.DVote("term %dreject to vote S%d for log cmp, [t%d,i%d] > [t%d,i%d] \n",
+				rf.currentTerm, args.CandidateId,
 				selfTerm, selfIndex, args.LastLogTerm, args.LastLogIndex)
 		}
 	}
@@ -421,8 +363,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 //with lock and hold lock
 func (rf *Raft) toHigherTermWithLock(term int) {
-	AssertTrue(rf.currentTerm < term, "tohigherTerm %d->%d\n", rf.me, rf.currentTerm, term)
-	Logger(dRole, "S%d ----> follow %d->%d\n", rf.me, rf.currentTerm, term)
+	rf.DTerm("term change %d-->%d\n", rf.currentTerm, term)
 	rf.role = FOLLOWER
 	rf.votes = 0
 	//persist 2c
@@ -463,17 +404,21 @@ func (rf *Raft) findTermFirstIndex(from int) int {
 		i--
 	}
 	i++
-	AssertTrue(i >= rf.offset && rf.logs[i-rf.offset].Term == rf.logs[from-rf.offset].Term,
+	rf.AssertTrue(i >= rf.offset && rf.logs[i-rf.offset].Term == rf.logs[from-rf.offset].Term,
 		"must equal,found i:%d Term:%d, from i:%d, Term:%d\n",
-		rf.me, i, rf.logs[i-rf.offset].Term, from, rf.logs[from-rf.offset].Term)
+		i, rf.logs[i-rf.offset].Term, from, rf.logs[from-rf.offset].Term)
 	return i
 }
 func (rf *Raft) Append(args *AppendArgs, reply *AppendReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	defer func() { reply.Term = rf.currentTerm }()
+	leaderSendLastIndex := args.PrevLogIndex + len(args.Entries)
+
+	rf.DAppend("term %d recv term %d append [%d->%d)\n", rf.currentTerm,
+		args.Term,
+		args.PrevLogIndex+1, leaderSendLastIndex)
 	//next index在false且term小于等于对方时启用
-	Logger(dLog2, "S%d term %d recv append \n", rf.me, rf.currentTerm)
 	reply.Success = false
 	reply.RejectedByTerm = false
 	if args.Term < rf.currentTerm {
@@ -487,31 +432,31 @@ func (rf *Raft) Append(args *AppendArgs, reply *AppendReply) {
 	} else {
 		rf.role = FOLLOWER
 	}
-	leaderSendLastIndex := args.PrevLogIndex + len(args.Entries)
+
 	reply.NextIndex = leaderSendLastIndex + 1
 
 	//too short case 3
 	if args.PrevLogIndex > rf.lastLogIndex {
 		reply.XTerm = -1
 		reply.XLen = rf.lastLogIndex + 1
-		Logger(dLog2, "S%d term %d lastIndex %d, %d's pre [t%d,i%d] too late\n",
-			rf.me, rf.currentTerm, rf.lastLogIndex, args.LeaderId, args.PrevLogTerm, args.PrevLogIndex)
+		rf.DAppend("term %d lastIndex %d, %d's pre [t%d,i%d] lacking pre\n",
+			rf.currentTerm, rf.lastLogIndex, args.LeaderId, args.PrevLogTerm, args.PrevLogIndex)
 		return
 	}
 
 	//前缀冲突，case 1 && case 2快速回退
 	if args.PrevLogIndex > rf.offset && rf.logs[args.PrevLogIndex-rf.offset].Term != args.PrevLogTerm {
 
-		Logger(dLog2, "S%d term %d log decline S%d term %d pre[t%d,i%d],for last log's term:%d i:%d\n",
-			rf.me, rf.currentTerm, args.LeaderId, args.Term, args.PrevLogTerm, args.PrevLogIndex,
+		rf.DAppend("term %d log decline S%d term %d pre[t%d,i%d],for last log's term:%d i:%d\n",
+			rf.currentTerm, args.LeaderId, args.Term, args.PrevLogTerm, args.PrevLogIndex,
 			rf.logs[rf.lastLogIndex-rf.offset].Term, rf.lastLogIndex)
 
 		reply.XLen = rf.lastLogIndex + 1
 		reply.XTerm = rf.logs[args.PrevLogIndex-rf.offset].Term
 		reply.XIndex = rf.findTermFirstIndex(args.PrevLogIndex)
 
-		Logger(dLog2, "S%d term %d return xlen%d xterm%d xindex%d\n",
-			rf.me, rf.currentTerm, reply.XLen, reply.XTerm, reply.XIndex)
+		rf.DAppend("term %d conflict xlen%d xterm%d xindex%d\n",
+			rf.currentTerm, reply.XLen, reply.XTerm, reply.XIndex)
 		return
 	}
 
@@ -520,8 +465,8 @@ func (rf *Raft) Append(args *AppendArgs, reply *AppendReply) {
 
 	reply.NextIndex = leaderSendLastIndex + 1
 	if leaderSendLastIndex <= rf.lastApplied {
-		Logger(dLog2, "S%d already applied %d %d or heartbeats\n",
-			rf.me, rf.lastApplied, leaderSendLastIndex)
+		rf.DAppend("term %d log %d already applied\n",
+			rf.currentTerm, leaderSendLastIndex)
 		return
 	}
 
@@ -553,17 +498,17 @@ func (rf *Raft) Append(args *AppendArgs, reply *AppendReply) {
 		to_commit = rf.lastLogIndex
 	}
 	if to_commit > rf.commitIndex {
-		Logger(dCommit, "S%d term %d commit (%d->%d]\n",
-			rf.me, rf.currentTerm, rf.commitIndex, to_commit)
+		rf.DCommit("term %d commit (%d->%d]\n",
+			rf.currentTerm, rf.commitIndex, to_commit)
 		rf.commitIndex = to_commit
 		if rf.commitIndex > rf.lastApplied {
-			Logger(dApply, "S%d signal sent\n", rf.me)
+			rf.DApply("signal sent\n")
 			rf.applyCond.Signal()
 		}
 
 	}
 
-	Logger(dLog2, "S%d term %d expect nextindex %d\n", rf.me, rf.currentTerm, reply.NextIndex)
+	rf.D(dLog2, "term %d expect nextindex %d\n", rf.currentTerm, reply.NextIndex)
 
 }
 
@@ -601,7 +546,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		Command: command,
 	})
 	index = rf.lastLogIndex
-	Logger(dClient, "S%d term %d request of index %d\n", rf.me, term, index)
+	rf.DClient("term %d request of index %d\n", term, index)
 	rf.mu.Unlock()
 
 	go func() {
@@ -624,7 +569,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 // should call killed() to check whether it should stop.
 //
 func (rf *Raft) Kill() {
-	Logger(dLog3, "S%d killed########################\n\n", rf.me)
+	rf.D(dLog3, "killed########################\n\n")
 	atomic.StoreInt32(&rf.dead, 1)
 	// Your code here, if desired.
 }
@@ -652,17 +597,27 @@ func (rf *Raft) applier() {
 	defer rf.mu.Unlock()
 	for !rf.killed() {
 		if rf.lastApplied < rf.commitIndex {
+			length := rf.commitIndex - rf.lastApplied
+			applyMsgs := make([]*ApplyMsg, length)
 
-			rf.lastApplied++
-			Logger(dApply, "S%d term %d apply %d\n", rf.me, rf.currentTerm, rf.lastApplied)
-			args := ApplyMsg{
-				CommandValid:  true,
-				SnapshotValid: false,
-				Command:       rf.logs[rf.lastApplied-rf.offset].Command,
-				CommandIndex:  rf.lastApplied,
+			rf.DApply("term %d apply [%d->%d]\n",
+				rf.currentTerm, rf.lastApplied+1, rf.commitIndex)
+
+			for i := 0; i < length; i++ {
+				rf.lastApplied++
+				applyMsgs[i] = &ApplyMsg{
+					CommandValid:  true,
+					SnapshotValid: false,
+					Command:       rf.logs[rf.lastApplied-rf.offset].Command,
+					CommandIndex:  rf.lastApplied,
+				}
 			}
 			rf.mu.Unlock()
-			rf.applyCh <- args
+
+			for _, msg := range applyMsgs {
+				rf.applyCh <- *msg
+			}
+
 			rf.mu.Lock()
 		} else {
 			rf.applyCond.Wait()
@@ -713,7 +668,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.snapshot = persister.ReadSnapshot()
 	rf.commitIndex = rf.offset
 	rf.lastApplied = rf.offset
-	Logger(dPersist, "S%d init from snap offset %d \n", rf.me, rf.offset)
+	rf.DPersist("init from snap offset %d\n", rf.offset)
 	// start ticker goroutine to start elections
 	go rf.applier()
 	go rf.ticker()

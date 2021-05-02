@@ -2,7 +2,7 @@ package raft
 
 //hold lock
 func (rf *Raft) beforeBeNewLeader() {
-	Logger(dLeader, "S%d ----> term %d-----Leader----- \n", rf.me, rf.currentTerm)
+	rf.DRole("be term %d ~~~~ Leader ~~~~~ \n", rf.currentTerm)
 	rf.role = LEADER
 	for i := 0; i < rf.peerCnt; i++ {
 		rf.nextIndex[i] = rf.lastLogIndex + 1 //modified
@@ -40,7 +40,7 @@ func (rf *Raft) goElection(term int, args *RequestVoteArgs) {
 				}
 
 				rf.votes++
-				Logger(dVote, "S%d term %d recv vote from S%d, votes %d\n", rf.me, term, peer, rf.votes)
+				rf.DVote("term %d got a vote from S%d, now votes %d\n", term, peer, rf.votes)
 				if rf.votes >= rf.major {
 					rf.beforeBeNewLeader()
 					go rf.doLeaderThing(rf.currentTerm)
@@ -66,7 +66,7 @@ func (rf *Raft) newElection() {
 
 	term := rf.currentTerm
 	rf.votes = 1
-	Logger(dRole, "S%d timeout-->term %d candidate\n", rf.me, rf.currentTerm)
+	rf.DRole("timeout be term %d ~~~~ candidate ~~~~\n", rf.currentTerm)
 
 	rf.role = CANDIDATE
 	args := RequestVoteArgs{
