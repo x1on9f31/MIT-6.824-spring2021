@@ -106,6 +106,7 @@ def run_test(test: str, race: bool, timing: bool):
         test_cmd.append("-race")
     if timing:
         test_cmd = ["time"] + cmd
+    # test_cmd = [f"./test-bin/{test}.test"]
     f, path = tempfile.mkstemp()
     start = time.time()
     proc = subprocess.run(test_cmd, stdout=f, stderr=f)
@@ -149,12 +150,7 @@ def run_tests(
     if verbose > 0:
         print(f"[yellow] Verbosity level set to {verbose}[/yellow]")
         os.environ['VERBOSE'] = str(verbose)
-
-    # test_cmd = ["go", "test", f"-run={test}"]
-    # if race:
-    #     test_cmd.append("-race")
-    # if timing:
-    #     test_cmd = ["time"] + cmd
+    
 
     while True:
 
