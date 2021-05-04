@@ -289,7 +289,7 @@ func (rf *Raft) deleteTailLogs(from int) {
 	rf.AssertTrue(from > 0 && from <= rf.lastLogIndex,
 		"from:%d lastLog:%d\n", from, rf.lastLogIndex)
 
-	rf.DLog1("term %d delete logs [%d->%d]\n", rf.currentTerm, rf.lastLogIndex, from-1)
+	rf.DLog("term %d delete logs [%d->%d]\n", rf.currentTerm, rf.lastLogIndex, from-1)
 	rf.logs = append([]LogEntry{}, rf.logs[:from-rf.offset]...)
 	rf.lastLogIndex = from - 1
 	rf.persist()
@@ -299,7 +299,7 @@ func (rf *Raft) deleteTailLogs(from int) {
 func (rf *Raft) appendLogs(logs []LogEntry) {
 
 	rf.lastLogIndex += len(logs)
-	rf.DLog1("term %d ++%d logs [tail->%d]\n", rf.currentTerm, len(logs), rf.lastLogIndex)
+	rf.DLog("term %d ++%d logs [tail->%d]\n", rf.currentTerm, len(logs), rf.lastLogIndex)
 	rf.logs = append(rf.logs, logs...)
 	rf.persist()
 }
@@ -307,7 +307,7 @@ func (rf *Raft) appendLogs(logs []LogEntry) {
 //hold lock
 func (rf *Raft) appendLog(log LogEntry) {
 	rf.lastLogIndex += 1
-	rf.DLog1("term %d ++1 log [tail->%d]\n", rf.currentTerm, rf.lastLogIndex)
+	rf.DLog("term %d ++1 log [tail->%d]\n", rf.currentTerm, rf.lastLogIndex)
 	rf.logs = append(rf.logs, log)
 	rf.persist()
 }
@@ -415,9 +415,19 @@ func (rf *Raft) Append(args *AppendArgs, reply *AppendReply) {
 	defer func() { reply.Term = rf.currentTerm }()
 	leaderSendLastIndex := args.PrevLogIndex + len(args.Entries)
 
-	rf.DAppend("term %d recv term %d append [%d->%d)\n", rf.currentTerm,
-		args.Term,
-		args.PrevLogIndex+1, leaderSendLastIndex)
+	if len(args.Entries) == 0 {
+		rf.DAppend("term %d recv term %d append []\n", rf.currentTerm,
+			args.Term)
+	} else if len(args.Entries) == 1 {
+		rf.DAppend("term %d recv term %d append [%d]\n", rf.currentTerm,
+			args.Term,
+			args.PrevLogIndex+1)
+	} else {
+		rf.DAppend("term %d recv term %d append [%d->%d]\n", rf.currentTerm,
+			args.Term,
+			args.PrevLogIndex+1, leaderSendLastIndex)
+	}
+
 	//next index在false且term小于等于对方时启用
 	reply.Success = false
 	reply.RejectedByTerm = false
@@ -498,17 +508,23 @@ func (rf *Raft) Append(args *AppendArgs, reply *AppendReply) {
 		to_commit = rf.lastLogIndex
 	}
 	if to_commit > rf.commitIndex {
-		rf.DCommit("term %d commit (%d->%d]\n",
-			rf.currentTerm, rf.commitIndex, to_commit)
+		if to_commit == rf.commitIndex+1 {
+			rf.DCommit("term %d commit [%d]\n",
+				rf.currentTerm, to_commit)
+		} else {
+			rf.DCommit("term %d commit [%d->%d]\n",
+				rf.currentTerm, rf.commitIndex+1, to_commit)
+		}
+
 		rf.commitIndex = to_commit
 		if rf.commitIndex > rf.lastApplied {
-			rf.DApply("signal sent\n")
+			//rf.DApply("signal sent\n")
 			rf.applyCond.Signal()
 		}
 
 	}
 
-	rf.D(dLog2, "term %d expect nextindex %d\n", rf.currentTerm, reply.NextIndex)
+	rf.DAppend("term %d expect nextindex %d\n", rf.currentTerm, reply.NextIndex)
 
 }
 
@@ -569,7 +585,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 // should call killed() to check whether it should stop.
 //
 func (rf *Raft) Kill() {
-	rf.D(dLog3, "killed########################\n\n")
+	rf.D(dLog2, "killed########################\n\n")
 	atomic.StoreInt32(&rf.dead, 1)
 	// Your code here, if desired.
 }
@@ -593,15 +609,19 @@ func (rf *Raft) ticker() {
 
 func (rf *Raft) applier() {
 	rf.mu.Lock()
-
 	defer rf.mu.Unlock()
 	for !rf.killed() {
 		if rf.lastApplied < rf.commitIndex {
 			length := rf.commitIndex - rf.lastApplied
 			applyMsgs := make([]*ApplyMsg, length)
 
-			rf.DApply("term %d apply [%d->%d]\n",
-				rf.currentTerm, rf.lastApplied+1, rf.commitIndex)
+			if length == 1 {
+				rf.DApply("term %d apply [%d]\n",
+					rf.currentTerm, rf.commitIndex)
+			} else {
+				rf.DApply("term %d apply [%d->%d]\n",
+					rf.currentTerm, rf.lastApplied+1, rf.commitIndex)
+			}
 
 			for i := 0; i < length; i++ {
 				rf.lastApplied++

@@ -81,6 +81,7 @@ func (rf *Raft) parallelLeader(term int, done chan bool) {
 					}
 
 					//lastLogIndex >= prevLogIndex + 1
+
 					rf.AssertTrue(rf.nextIndex[server] > rf.matchIndex[server], "term %d for S%d next %d match %d\n",
 						server, rf.nextIndex[server], rf.matchIndex[server])
 
@@ -94,9 +95,7 @@ func (rf *Raft) parallelLeader(term int, done chan bool) {
 						arg := AppendArgs{Term: term, LeaderId: rf.me, PrevLogIndex: prevLogIndex, PrevLogTerm: prevLogTerm, Entries: rf.logs[prevLogIndex+1-rf.offset:], LeaderCommit: rf.commitIndex}
 						go rf.doAppendRPC(server, term, &arg)
 					}
-					rf.mu.Unlock()
-					time.Sleep(HEART_INTERVAL / 2)
-					rf.mu.Lock()
+					rf.clientReqCond.Wait()
 				}
 
 			}(i)
@@ -154,8 +153,14 @@ func (rf *Raft) appendOkAsLeader(nextIndex, server int, isAppend bool) {
 	}
 	if major_match > rf.commitIndex &&
 		rf.logs[major_match-rf.offset].Term == rf.currentTerm {
-		rf.DCommit("term %d leader commit (%d->%d]\n",
-			rf.currentTerm, rf.commitIndex, major_match)
+		if major_match == rf.commitIndex+1 {
+			rf.DCommit("term %d leader commit [%d]\n",
+				rf.currentTerm, major_match)
+		} else {
+			rf.DCommit("term %d leader commit [%d->%d]\n",
+				rf.currentTerm, rf.commitIndex+1, major_match)
+		}
+
 		rf.commitIndex = major_match
 		rf.applyCond.Signal()
 	}
@@ -270,8 +275,17 @@ func (rf *Raft) checkAppendRPC(term, server int, reply *AppendReply) {
 }
 
 func (rf *Raft) doAppendRPC(server, term int, args *AppendArgs) {
-	rf.DLeader("term %d leader append to S%d [%d->%d)\n",
-		rf.currentTerm, server, args.PrevLogIndex+1, args.PrevLogIndex+len(args.Entries)+1)
+	if len(args.Entries) == 0 {
+		rf.DLeader("term %d leader append to S%d []\n",
+			rf.currentTerm, server)
+	} else if len(args.Entries) == 1 {
+		rf.DLeader("term %d leader append to S%d [%d]\n",
+			rf.currentTerm, server,
+			args.PrevLogIndex+1)
+	} else {
+		rf.DLeader("term %d leader append to S%d [%d->%d]\n",
+			rf.currentTerm, server, args.PrevLogIndex+1, args.PrevLogIndex+len(args.Entries))
+	}
 
 	reply := AppendReply{
 		Term:      0,

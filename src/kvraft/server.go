@@ -1,15 +1,25 @@
 package kvraft
 
+//多client index to chan map，getChan方法
+//在apply处过滤，某次没有唤醒无所谓。log可以重复，保证sm不重复就可以
 import (
-	"6.824/labgob"
-	"6.824/labrpc"
-	"6.824/raft"
+	"bytes"
 	"log"
 	"sync"
 	"sync/atomic"
+
+	"6.824/labgob"
+	"6.824/labrpc"
+	"6.824/raft"
 )
 
-const Debug = false
+const (
+	Debug       = false
+	TYPE_GET    = 0
+	TYPE_PUT    = 1
+	TYPE_APPEND = 2
+	TYPE_OTHER  = 3
+)
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug {
@@ -18,32 +28,77 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 	return
 }
 
-
 type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+	ClientID int64
+	Cmd_Seq  int
+	OpType   int
+	Key      string
+	Value    string
 }
 
 type KVServer struct {
-	mu      sync.Mutex
-	me      int
-	rf      *raft.Raft
-	applyCh chan raft.ApplyMsg
-	dead    int32 // set by Kill()
-
-	maxraftstate int // snapshot if log grows this big
-
+	mu           sync.Mutex
+	me           int
+	rf           *raft.Raft
+	applyCh      chan raft.ApplyMsg
+	dead         int32 // set by Kill()
+	maxraftstate int   // snapshot if log grows this big
+	persister    *raft.Persister
 	// Your definitions here.
-}
+	client_next_seq map[int64]int
+	kv_map          map[string]string
+	lastApplied     int
 
+	reply_chan map[int]chan *Reply
+}
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
+	request_arg := Request{
+		OpType:   TYPE_GET,
+		Key:      args.Key,
+		ClientID: args.ClientID,
+		Cmd_Seq:  args.Cmd_Seq,
+	}
+
+	result := kv.doRequest(&request_arg)
+	reply.Err = result.Err
+	reply.Value = result.Value
+	kv.DServer("[%3d--%d] get return result%#v\n",
+		args.ClientID%1000, args.Cmd_Seq, reply)
+
+}
+func (kv *KVServer) DServer(format string, a ...interface{}) {
+	raft.DLogger("SVER", kv.me, format, a...)
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
+	request_arg := Request{
+		Key:      args.Key,
+		Value:    args.Value,
+		ClientID: args.ClientID,
+		Cmd_Seq:  args.Cmd_Seq,
+	}
+	switch args.Op {
+	case "Put":
+		request_arg.OpType = TYPE_PUT
+	case "Append":
+		request_arg.OpType = TYPE_APPEND
+	default:
+		kv.DServer("putAppend err type %d from [%3d--%d]\n",
+			args.Op, args.ClientID%1000, args.Cmd_Seq)
+	}
+
+	reply_arg := kv.doRequest(&request_arg) //等待
+
+	reply.Err = reply_arg.Err
+
+	kv.DServer("[%3d--%d] putAppend return result%#v\n",
+		args.ClientID%1000, args.Cmd_Seq, reply)
 }
 
 //
@@ -57,6 +112,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 // to suppress debug output from a Kill()ed instance.
 //
 func (kv *KVServer) Kill() {
+	kv.DServer("server killed#############\n")
 	atomic.StoreInt32(&kv.dead, 1)
 	kv.rf.Kill()
 	// Your code here, if desired.
@@ -65,6 +121,194 @@ func (kv *KVServer) Kill() {
 func (kv *KVServer) killed() bool {
 	z := atomic.LoadInt32(&kv.dead)
 	return z == 1
+}
+
+//hold lock
+func (kv *KVServer) checkForResult(req *Request, reply *Reply) bool {
+	if kv.client_next_seq[req.ClientID] > req.Cmd_Seq {
+		if req.OpType == TYPE_GET {
+			reply.Value = kv.kv_map[req.Key]
+		}
+		return true
+	}
+	return false
+}
+func (kv *KVServer) doRequest(req *Request) *Reply {
+	reply := Reply{}
+
+	kv.mu.Lock()
+	kv.DServer("do request args:%#v \n", req)
+
+	//already applied
+	if kv.checkForResult(req, &reply) {
+		kv.DServer("[%3d--%d] already successed\n",
+			req.ClientID%1000, req.Cmd_Seq)
+		kv.mu.Unlock()
+		return &reply
+	}
+
+	//not applied, need proposal
+	command := Op{
+		Cmd_Seq:  req.Cmd_Seq,
+		ClientID: req.ClientID,
+		OpType:   req.OpType,
+		Key:      req.Key,
+		Value:    req.Value,
+	}
+	index, _, isLeader := kv.rf.Start(command)
+	if !isLeader {
+		reply.Err = "not leader"
+		kv.DServer("declined [%3d--%d] for not leader\n",
+			req.ClientID%1000, req.Cmd_Seq)
+		kv.mu.Unlock()
+		return &reply
+	} else {
+		kv.DServer("start [%3d--%d] as leader?\n",
+			req.ClientID%1000, req.Cmd_Seq)
+	}
+	wait_chan := kv.getChan(index)
+	kv.mu.Unlock()
+
+	result := <-wait_chan //等待
+
+	kv.mu.Lock()
+	if kv.checkForResult(req, &reply) {
+		kv.DServer("[%3d--%d] successed !!!!! %#v\n",
+			req.ClientID%1000, req.Cmd_Seq, result)
+	} else {
+		reply.Err = "failed"
+		kv.DServer("[%3d--%d] failed applied %#v\n",
+			req.ClientID%1000, req.Cmd_Seq, result)
+	}
+	kv.mu.Unlock()
+	return &reply
+}
+
+//hold lock
+func (kv *KVServer) getChan(index int) chan *Reply {
+	if kv.reply_chan[index] == nil {
+		kv.reply_chan[index] = make(chan *Reply, 1)
+	}
+	return kv.reply_chan[index]
+}
+func (kv *KVServer) applier() {
+	for !kv.killed() {
+		m := <-kv.applyCh
+		kv.mu.Lock()
+		if m.SnapshotValid {
+			kv.DServer("recv Installsnapshot %v %v\n", m.SnapshotIndex, kv.lastApplied)
+			if kv.rf.CondInstallSnapshot(m.SnapshotTerm,
+				m.SnapshotIndex, m.Snapshot) {
+				old_apply := kv.lastApplied
+				kv.DServer("decide Installsnapshot %v <- %v\n", m.SnapshotIndex, kv.lastApplied)
+				kv.applyInstallSnapshot(m.Snapshot)
+				for i := old_apply + 1; i <= m.SnapshotIndex; i++ {
+					if kv.reply_chan[m.CommandIndex] != nil {
+						kv.reply_chan[m.CommandIndex] <- &Reply{}
+					}
+				}
+
+			}
+
+		} else if m.CommandValid && m.CommandIndex == 1+kv.lastApplied {
+			kv.DServer("apply %d %#v lastApplied %v\n", m.CommandIndex, m.Command, kv.lastApplied)
+
+			kv.lastApplied = m.CommandIndex
+			v, ok := m.Command.(Op)
+			if !ok {
+				//err
+				return
+			}
+			kv.applyCommand(v) //过滤
+
+			if kv.needSnapshot() {
+				kv.doSnapshotForRaft(m.CommandIndex)
+			}
+			if kv.reply_chan[m.CommandIndex] != nil {
+				kv.reply_chan[m.CommandIndex] <- &Reply{}
+			}
+
+		} else if m.CommandValid && m.CommandIndex != 1+kv.lastApplied {
+			// out of order, may ignore
+			kv.DServer("ignore apply %v for lastApplied %v\n",
+				m.CommandIndex, kv.lastApplied)
+		} else {
+			//command wrong
+			kv.DServer("Invalid apply msg\n")
+		}
+
+		kv.mu.Unlock()
+	}
+
+}
+func (kv *KVServer) applyCommand(v Op) {
+
+	if kv.client_next_seq[v.ClientID] > v.Cmd_Seq {
+		return
+	}
+	if kv.client_next_seq[v.ClientID] != v.Cmd_Seq {
+		panic("cmd seq gap!!!")
+	}
+
+	kv.client_next_seq[v.ClientID]++
+	if v.OpType == TYPE_PUT {
+		kv.kv_map[v.Key] = v.Value
+	} else if v.OpType == TYPE_APPEND {
+		kv.kv_map[v.Key] += v.Value
+	}
+}
+
+//hold lock
+func (kv *KVServer) applyInstallSnapshot(snap []byte) {
+	if snap == nil || len(snap) < 1 { // bootstrap without any state?
+		kv.DServer("empty snap\n")
+		return
+	}
+
+	r := bytes.NewBuffer(snap)
+	d := labgob.NewDecoder(r)
+	lastIndex := 0
+	client_to_nextseq_map := make(map[int64]int)
+	kv_map := make(map[string]string)
+	if d.Decode(&lastIndex) != nil ||
+		d.Decode(&client_to_nextseq_map) != nil ||
+		d.Decode(&kv_map) != nil {
+		kv.DServer("apply install decode err\n")
+		panic("err decode snap")
+	} else {
+		kv.lastApplied = lastIndex
+		kv.client_next_seq = client_to_nextseq_map
+		kv.kv_map = kv_map
+	}
+
+}
+
+//hold lock
+func (kv *KVServer) doSnapshotForRaft(index int) {
+	kv.DServer("do snapshot for raft %v %v\n", index, kv.lastApplied)
+
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	// v := m.Command
+	// e.Encode(v)
+	lastIndex := kv.lastApplied
+	e.Encode(lastIndex)
+	e.Encode(kv.client_next_seq)
+	e.Encode(kv.kv_map)
+	kv.rf.Snapshot(index, w.Bytes())
+}
+
+//hold lock
+func (kv *KVServer) needSnapshot() bool {
+	if kv.maxraftstate == -1 {
+		return false
+	}
+	size := kv.persister.RaftStateSize()
+	if size >= kv.maxraftstate*2/3-1 {
+		kv.DServer("used size: %d / %d \n", size, kv.maxraftstate)
+		return true
+	}
+	return false
 }
 
 //
@@ -87,15 +331,24 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	labgob.Register(Op{})
 
 	kv := new(KVServer)
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
 	kv.me = me
 	kv.maxraftstate = maxraftstate
+	kv.persister = persister
+	// You may need initialization code here.
+	kv.applyCh = make(chan raft.ApplyMsg, 30)
 
 	// You may need initialization code here.
 
-	kv.applyCh = make(chan raft.ApplyMsg)
+	kv.reply_chan = make(map[int]chan *Reply)
+	kv.lastApplied = 0
+	kv.kv_map = make(map[string]string)
+	kv.client_next_seq = make(map[int64]int)
+	snap := kv.persister.ReadSnapshot()
+	kv.applyInstallSnapshot(snap)
+
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
-
-	// You may need initialization code here.
-
+	go kv.applier()
 	return kv
 }

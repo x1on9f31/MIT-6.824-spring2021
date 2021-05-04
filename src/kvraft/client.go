@@ -1,13 +1,43 @@
 package kvraft
 
-import "6.824/labrpc"
-import "crypto/rand"
-import "math/big"
+import (
+	"crypto/rand"
+	"fmt"
+	"math/big"
+	"sync"
+	"time"
 
+	"6.824/labrpc"
+)
+
+var used_ID map[int64]bool
+var map_lock sync.Mutex
+
+func init() {
+	used_ID = make(map[int64]bool)
+	used_ID[-1] = true
+}
+
+func getUnusedClientID() int64 {
+	map_lock.Lock()
+	defer map_lock.Unlock()
+	for {
+		id := nrand()
+		if !used_ID[id] {
+			used_ID[id] = true
+			return id
+		}
+	}
+}
 
 type Clerk struct {
 	servers []*labrpc.ClientEnd
 	// You will have to modify this struct.
+	id        int64
+	serverCnt int
+
+	cmd_seq    int
+	lastLeader int
 }
 
 func nrand() int64 {
@@ -20,7 +50,11 @@ func nrand() int64 {
 func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
+	ck.serverCnt = len(servers)
+	ck.id = getUnusedClientID()
+	ck.cmd_seq = 0
 	// You'll have to add code here.
+	time.Sleep(1 * time.Second)
 	return ck
 }
 
@@ -39,7 +73,41 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 func (ck *Clerk) Get(key string) string {
 
 	// You will have to modify this function.
-	return ""
+	args := GetArgs{
+		Key:      key,
+		ClientID: ck.id,
+		Cmd_Seq:  ck.cmd_seq,
+	}
+
+	for {
+		timer := time.NewTimer(time.Millisecond * 100)
+		done := make(chan *GetReply)
+		args.Cmd_Seq = ck.cmd_seq
+		go func(d chan *GetReply) {
+			reply := GetReply{
+				Err:   "",
+				Value: "",
+			}
+			ok := ck.servers[ck.lastLeader].Call("KVServer.Get", &args, &reply)
+			if !ok {
+				reply.Err = "!ok rpc"
+			}
+			d <- &reply
+		}(done)
+
+		select {
+		case <-timer.C:
+		case reply := <-done:
+			if reply.Err == "" {
+				fmt.Printf("[%3d--%d] clerk get okkkkk : %v\n", ck.id%1000, ck.cmd_seq, reply.Value)
+				ck.cmd_seq++
+				return reply.Value
+			}
+		}
+
+		ck.lastLeader = (ck.lastLeader + 1) % ck.serverCnt
+	}
+
 }
 
 //
@@ -54,6 +122,45 @@ func (ck *Clerk) Get(key string) string {
 //
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	// You will have to modify this function.
+	args := PutAppendArgs{
+		Key:      key,
+		Value:    value,
+		Op:       op,
+		ClientID: ck.id,
+		Cmd_Seq:  ck.cmd_seq,
+	}
+
+	for {
+		timer := time.NewTimer(time.Millisecond * 100)
+		done := make(chan *PutAppendReply)
+		args.Cmd_Seq = ck.cmd_seq
+		go func(d chan *PutAppendReply) {
+			reply := PutAppendReply{
+				Err: "",
+			}
+			ok := ck.servers[ck.lastLeader].Call("KVServer.PutAppend", &args, &reply)
+			if !ok {
+				reply.Err = "!ok rpc"
+			}
+			done <- &reply
+		}(done)
+
+		select {
+		case <-timer.C:
+		case reply := <-done:
+			if reply.Err == "" {
+				fmt.Printf("[%3d--%d] clerk putAppend okkkkk\n", ck.id%1000, ck.cmd_seq)
+				ck.cmd_seq++
+				return
+			} 
+			// else {
+			// 	fmt.Printf("[%3d--%d] clerk putAppend not ok err: %v\n", ck.id%1000, ck.cmd_seq, reply.Err)
+			// }
+		}
+
+		ck.lastLeader = (ck.lastLeader + 1) % ck.serverCnt
+	}
+
 }
 
 func (ck *Clerk) Put(key string, value string) {
