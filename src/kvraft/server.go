@@ -1,7 +1,5 @@
 package kvraft
 
-//多client index to chan map，getChan方法
-//在apply处过滤，某次没有唤醒无所谓。log可以重复，保证sm不重复就可以
 import (
 	"bytes"
 	"log"
@@ -28,7 +26,7 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 	return
 }
 
-type Op struct {
+type Command struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
@@ -55,6 +53,12 @@ type KVServer struct {
 	reply_chan map[int]chan *Reply
 }
 
+//just for printing logs
+func (kv *KVServer) DServer(format string, a ...interface{}) {
+	raft.DLogger("SVER", kv.me, format, a...)
+}
+
+//rpc handler
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
 	request_arg := Request{
@@ -70,9 +74,6 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	kv.DServer("[%3d--%d] get return result%#v\n",
 		args.ClientID%1000, args.Cmd_Seq, reply)
 
-}
-func (kv *KVServer) DServer(format string, a ...interface{}) {
-	raft.DLogger("SVER", kv.me, format, a...)
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
@@ -93,12 +94,63 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 			args.Op, args.ClientID%1000, args.Cmd_Seq)
 	}
 
-	reply_arg := kv.doRequest(&request_arg) //等待
+	reply_arg := kv.doRequest(&request_arg) //wait
 
 	reply.Err = reply_arg.Err
 
 	kv.DServer("[%3d--%d] putAppend return result%#v\n",
 		args.ClientID%1000, args.Cmd_Seq, reply)
+}
+
+func (kv *KVServer) doRequest(req *Request) *Reply {
+	reply := Reply{}
+
+	kv.mu.Lock()
+	kv.DServer("do request args:%#v \n", req)
+
+	//already applied
+	if kv.checkForResult(req, &reply) {
+		kv.DServer("[%3d--%d] already successed\n",
+			req.ClientID%1000, req.Cmd_Seq)
+		kv.mu.Unlock()
+		return &reply
+	}
+
+	//not applied, need proposal
+	command := Command{
+		Cmd_Seq:  req.Cmd_Seq,
+		ClientID: req.ClientID,
+		OpType:   req.OpType,
+		Key:      req.Key,
+		Value:    req.Value,
+	}
+	index, _, isLeader := kv.rf.Start(command)
+	if !isLeader {
+		reply.Err = "not leader"
+		kv.DServer("declined [%3d--%d] for not leader\n",
+			req.ClientID%1000, req.Cmd_Seq)
+		kv.mu.Unlock()
+		return &reply
+	} else {
+		kv.DServer("start [%3d--%d] as leader?\n",
+			req.ClientID%1000, req.Cmd_Seq)
+	}
+	wait_chan := kv.getWaitChan(index)
+	kv.mu.Unlock()
+
+	result := <-wait_chan //等待
+
+	kv.mu.Lock()
+	if kv.checkForResult(req, &reply) {
+		kv.DServer("[%3d--%d] successed !!!!! %#v\n",
+			req.ClientID%1000, req.Cmd_Seq, result)
+	} else {
+		reply.Err = "failed"
+		kv.DServer("[%3d--%d] failed applied %#v\n",
+			req.ClientID%1000, req.Cmd_Seq, result)
+	}
+	kv.mu.Unlock()
+	return &reply
 }
 
 //
@@ -123,7 +175,7 @@ func (kv *KVServer) killed() bool {
 	return z == 1
 }
 
-//hold lock
+//hold lock,check if there is an avaliable result
 func (kv *KVServer) checkForResult(req *Request, reply *Reply) bool {
 	if kv.client_next_seq[req.ClientID] > req.Cmd_Seq {
 		if req.OpType == TYPE_GET {
@@ -133,69 +185,21 @@ func (kv *KVServer) checkForResult(req *Request, reply *Reply) bool {
 	}
 	return false
 }
-func (kv *KVServer) doRequest(req *Request) *Reply {
-	reply := Reply{}
 
-	kv.mu.Lock()
-	kv.DServer("do request args:%#v \n", req)
-
-	//already applied
-	if kv.checkForResult(req, &reply) {
-		kv.DServer("[%3d--%d] already successed\n",
-			req.ClientID%1000, req.Cmd_Seq)
-		kv.mu.Unlock()
-		return &reply
-	}
-
-	//not applied, need proposal
-	command := Op{
-		Cmd_Seq:  req.Cmd_Seq,
-		ClientID: req.ClientID,
-		OpType:   req.OpType,
-		Key:      req.Key,
-		Value:    req.Value,
-	}
-	index, _, isLeader := kv.rf.Start(command)
-	if !isLeader {
-		reply.Err = "not leader"
-		kv.DServer("declined [%3d--%d] for not leader\n",
-			req.ClientID%1000, req.Cmd_Seq)
-		kv.mu.Unlock()
-		return &reply
-	} else {
-		kv.DServer("start [%3d--%d] as leader?\n",
-			req.ClientID%1000, req.Cmd_Seq)
-	}
-	wait_chan := kv.getChan(index)
-	kv.mu.Unlock()
-
-	result := <-wait_chan //等待
-
-	kv.mu.Lock()
-	if kv.checkForResult(req, &reply) {
-		kv.DServer("[%3d--%d] successed !!!!! %#v\n",
-			req.ClientID%1000, req.Cmd_Seq, result)
-	} else {
-		reply.Err = "failed"
-		kv.DServer("[%3d--%d] failed applied %#v\n",
-			req.ClientID%1000, req.Cmd_Seq, result)
-	}
-	kv.mu.Unlock()
-	return &reply
-}
-
-//hold lock
-func (kv *KVServer) getChan(index int) chan *Reply {
+//hold lock, get a channel to read result
+func (kv *KVServer) getWaitChan(index int) chan *Reply {
 	if kv.reply_chan[index] == nil {
 		kv.reply_chan[index] = make(chan *Reply, 1)
 	}
 	return kv.reply_chan[index]
 }
+
+//recv ApplyMsg from applyCh
 func (kv *KVServer) applier() {
 	for !kv.killed() {
 		m := <-kv.applyCh
 		kv.mu.Lock()
-		if m.SnapshotValid {
+		if m.SnapshotValid { //snapshot
 			kv.DServer("recv Installsnapshot %v %v\n", m.SnapshotIndex, kv.lastApplied)
 			if kv.rf.CondInstallSnapshot(m.SnapshotTerm,
 				m.SnapshotIndex, m.Snapshot) {
@@ -207,19 +211,17 @@ func (kv *KVServer) applier() {
 						kv.reply_chan[m.CommandIndex] <- &Reply{}
 					}
 				}
-
 			}
-
 		} else if m.CommandValid && m.CommandIndex == 1+kv.lastApplied {
 			kv.DServer("apply %d %#v lastApplied %v\n", m.CommandIndex, m.Command, kv.lastApplied)
 
 			kv.lastApplied = m.CommandIndex
-			v, ok := m.Command.(Op)
+			v, ok := m.Command.(Command)
 			if !ok {
 				//err
 				return
 			}
-			kv.applyCommand(v) //过滤
+			kv.applyCommand(v) //may ignore duplicate cmd
 
 			if kv.needSnapshot() {
 				kv.doSnapshotForRaft(m.CommandIndex)
@@ -229,11 +231,11 @@ func (kv *KVServer) applier() {
 			}
 
 		} else if m.CommandValid && m.CommandIndex != 1+kv.lastApplied {
-			// out of order, may ignore
+			// out of order cmd, just ignore
 			kv.DServer("ignore apply %v for lastApplied %v\n",
 				m.CommandIndex, kv.lastApplied)
 		} else {
-			//command wrong
+			// wrong command
 			kv.DServer("Invalid apply msg\n")
 		}
 
@@ -241,7 +243,7 @@ func (kv *KVServer) applier() {
 	}
 
 }
-func (kv *KVServer) applyCommand(v Op) {
+func (kv *KVServer) applyCommand(v Command) {
 
 	if kv.client_next_seq[v.ClientID] > v.Cmd_Seq {
 		return
@@ -328,7 +330,7 @@ func (kv *KVServer) needSnapshot() bool {
 func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister, maxraftstate int) *KVServer {
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
-	labgob.Register(Op{})
+	labgob.Register(Command{})
 
 	kv := new(KVServer)
 	kv.mu.Lock()

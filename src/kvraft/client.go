@@ -73,22 +73,23 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 func (ck *Clerk) Get(key string) string {
 
 	// You will have to modify this function.
-	args := GetArgs{
-		Key:      key,
-		ClientID: ck.id,
-		Cmd_Seq:  ck.cmd_seq,
-	}
 
 	for {
+		args := GetArgs{
+			Key:      key,
+			ClientID: ck.id,
+		}
 		timer := time.NewTimer(time.Millisecond * 100)
 		done := make(chan *GetReply)
 		args.Cmd_Seq = ck.cmd_seq
+
+		peer := ck.lastLeader
 		go func(d chan *GetReply) {
 			reply := GetReply{
 				Err:   "",
 				Value: "",
 			}
-			ok := ck.servers[ck.lastLeader].Call("KVServer.Get", &args, &reply)
+			ok := ck.servers[peer].Call("KVServer.Get", &args, &reply)
 			if !ok {
 				reply.Err = "!ok rpc"
 			}
@@ -99,13 +100,16 @@ func (ck *Clerk) Get(key string) string {
 		case <-timer.C:
 		case reply := <-done:
 			if reply.Err == "" {
-				fmt.Printf("[%3d--%d] clerk get okkkkk : %v\n", ck.id%1000, ck.cmd_seq, reply.Value)
+				fmt.Printf("[%3d--%d] clerk get okkkkk : %v\n", ck.id%1000, args.Cmd_Seq, reply.Value)
+
 				ck.cmd_seq++
+
 				return reply.Value
 			}
 		}
 
 		ck.lastLeader = (ck.lastLeader + 1) % ck.serverCnt
+
 	}
 
 }
@@ -122,23 +126,25 @@ func (ck *Clerk) Get(key string) string {
 //
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	// You will have to modify this function.
-	args := PutAppendArgs{
-		Key:      key,
-		Value:    value,
-		Op:       op,
-		ClientID: ck.id,
-		Cmd_Seq:  ck.cmd_seq,
-	}
 
 	for {
+		args := PutAppendArgs{
+			Key:      key,
+			Value:    value,
+			Op:       op,
+			ClientID: ck.id,
+		}
 		timer := time.NewTimer(time.Millisecond * 100)
 		done := make(chan *PutAppendReply)
+
 		args.Cmd_Seq = ck.cmd_seq
+
+		peer := ck.lastLeader
 		go func(d chan *PutAppendReply) {
 			reply := PutAppendReply{
 				Err: "",
 			}
-			ok := ck.servers[ck.lastLeader].Call("KVServer.PutAppend", &args, &reply)
+			ok := ck.servers[peer].Call("KVServer.PutAppend", &args, &reply)
 			if !ok {
 				reply.Err = "!ok rpc"
 			}
@@ -149,16 +155,19 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		case <-timer.C:
 		case reply := <-done:
 			if reply.Err == "" {
-				fmt.Printf("[%3d--%d] clerk putAppend okkkkk\n", ck.id%1000, ck.cmd_seq)
+				fmt.Printf("[%3d--%d] clerk putAppend okkkkk\n", ck.id%1000, args.Cmd_Seq)
+
 				ck.cmd_seq++
+
 				return
-			} 
+			}
 			// else {
 			// 	fmt.Printf("[%3d--%d] clerk putAppend not ok err: %v\n", ck.id%1000, ck.cmd_seq, reply.Err)
 			// }
 		}
 
 		ck.lastLeader = (ck.lastLeader + 1) % ck.serverCnt
+
 	}
 
 }

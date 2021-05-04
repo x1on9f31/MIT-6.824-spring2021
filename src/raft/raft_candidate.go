@@ -10,11 +10,9 @@ func (rf *Raft) beforeBeNewLeader() {
 	}
 
 }
-func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
-	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
-	return ok
-}
-func (rf *Raft) goElection(term int, args *RequestVoteArgs) {
+
+//start act as a candidate
+func (rf *Raft) doCandidateThing(term int, args *RequestVoteArgs) {
 
 	for i := 0; i < rf.peerCnt; i++ {
 		if i != rf.me {
@@ -31,11 +29,8 @@ func (rf *Raft) goElection(term int, args *RequestVoteArgs) {
 					return
 				}
 
-				if rf.currentTerm != term || rf.role != CANDIDATE || !ok || reply.Term < term {
-					return
-				}
-
-				if !reply.VoteGranted {
+				if rf.currentTerm != term || rf.role != CANDIDATE ||
+					!ok || reply.Term < term || !reply.VoteGranted {
 					return
 				}
 
@@ -51,7 +46,6 @@ func (rf *Raft) goElection(term int, args *RequestVoteArgs) {
 
 }
 
-//drop lock
 func (rf *Raft) newElection() {
 
 	rf.mu.Lock()
@@ -77,6 +71,6 @@ func (rf *Raft) newElection() {
 	}
 	rf.mu.Unlock()
 
-	rf.goElection(term, &args)
+	rf.doCandidateThing(term, &args)
 
 }

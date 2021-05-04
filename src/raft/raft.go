@@ -38,16 +38,16 @@ type LogEntry struct {
 
 type Raft struct {
 	//initialized, and won't change until restart
-	mu            sync.Mutex          // Lock to protect shared access to this peer's state
-	peers         []*labrpc.ClientEnd // RPC end points of all peers
-	persister     *Persister          // Object to hold this peer's persisted state
-	me            int                 // this peer's index into peers[]
-	major         int
-	peerCnt       int
-	applyCh       chan ApplyMsg
-	applyCond     *sync.Cond
-	clientReqCond *sync.Cond
-	timerLock     sync.Mutex
+	mu             sync.Mutex          // Lock to protect shared access to this peer's state
+	peers          []*labrpc.ClientEnd // RPC end points of all peers
+	persister      *Persister          // Object to hold this peer's persisted state
+	me             int                 // this peer's index into peers[]
+	major          int
+	peerCnt        int
+	applyCh        chan ApplyMsg
+	applyCond      *sync.Cond
+	wakeLeaderCond *sync.Cond
+	timerLock      sync.Mutex
 
 	//protected by atomic
 	dead int32 // set by Kill()
@@ -84,6 +84,10 @@ func (rf *Raft) GetState() (int, bool) {
 	rf.mu.Unlock()
 	return term, isleader
 }
+
+//hold lock means:
+//before enter the function we alredy got rf.mu.Lock
+//and leave the function without Unlock
 
 //hold lock
 func (rf *Raft) doPersistRaftAndSnap(index, term int, snapshot []byte) {
@@ -204,8 +208,6 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapArgs, reply *InstallSnapReply) 
 	if args.Term < rf.currentTerm {
 		return
 	}
-
-	//higher term leader
 	if args.Term > rf.currentTerm {
 		rf.toHigherTermWithLock(args.Term)
 	}
@@ -271,9 +273,6 @@ type RequestVoteReply struct {
 	VoteGranted bool //2a
 }
 
-//
-// example RequestVote RPC handler.
-//
 func isNewEnough(selfTerm, otherTerm, selfIndex, otherIndex int) bool {
 	if otherTerm > selfTerm {
 		return true
@@ -296,7 +295,7 @@ func (rf *Raft) deleteTailLogs(from int) {
 }
 
 //hold lock,
-func (rf *Raft) appendLogs(logs []LogEntry) {
+func (rf *Raft) appendManyLogs(logs []LogEntry) {
 
 	rf.lastLogIndex += len(logs)
 	rf.DLog("term %d ++%d logs [tail->%d]\n", rf.currentTerm, len(logs), rf.lastLogIndex)
@@ -305,7 +304,7 @@ func (rf *Raft) appendLogs(logs []LogEntry) {
 }
 
 //hold lock
-func (rf *Raft) appendLog(log LogEntry) {
+func (rf *Raft) appendOneLog(log LogEntry) {
 	rf.lastLogIndex += 1
 	rf.DLog("term %d ++1 log [tail->%d]\n", rf.currentTerm, rf.lastLogIndex)
 	rf.logs = append(rf.logs, log)
@@ -409,6 +408,7 @@ func (rf *Raft) findTermFirstIndex(from int) int {
 		i, rf.logs[i-rf.offset].Term, from, rf.logs[from-rf.offset].Term)
 	return i
 }
+
 func (rf *Raft) Append(args *AppendArgs, reply *AppendReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -428,7 +428,6 @@ func (rf *Raft) Append(args *AppendArgs, reply *AppendReply) {
 			args.PrevLogIndex+1, leaderSendLastIndex)
 	}
 
-	//next index在false且term小于等于对方时启用
 	reply.Success = false
 	reply.RejectedByTerm = false
 	if args.Term < rf.currentTerm {
@@ -445,7 +444,7 @@ func (rf *Raft) Append(args *AppendArgs, reply *AppendReply) {
 
 	reply.NextIndex = leaderSendLastIndex + 1
 
-	//too short case 3
+	//my logs is too short, using quick rollback case 3
 	if args.PrevLogIndex > rf.lastLogIndex {
 		reply.XTerm = -1
 		reply.XLen = rf.lastLogIndex + 1
@@ -454,7 +453,7 @@ func (rf *Raft) Append(args *AppendArgs, reply *AppendReply) {
 		return
 	}
 
-	//前缀冲突，case 1 && case 2快速回退
+	//prefix conflict,must d0 rollback, quick rollback case 1 && case 2
 	if args.PrevLogIndex > rf.offset && rf.logs[args.PrevLogIndex-rf.offset].Term != args.PrevLogTerm {
 
 		rf.DAppend("term %d log decline S%d term %d pre[t%d,i%d],for last log's term:%d i:%d\n",
@@ -470,7 +469,7 @@ func (rf *Raft) Append(args *AppendArgs, reply *AppendReply) {
 		return
 	}
 
-	//前缀匹配
+	//prefix matched
 	reply.Success = true
 
 	reply.NextIndex = leaderSendLastIndex + 1
@@ -479,7 +478,7 @@ func (rf *Raft) Append(args *AppendArgs, reply *AppendReply) {
 			rf.currentTerm, leaderSendLastIndex)
 		return
 	}
-
+	//scan logs, delete logs that succeeds the first unmatched log
 	scan_end := rf.lastLogIndex
 	if scan_end > leaderSendLastIndex {
 		scan_end = leaderSendLastIndex
@@ -498,11 +497,12 @@ func (rf *Raft) Append(args *AppendArgs, reply *AppendReply) {
 			scan_from++
 		}
 	}
-
+	//append the left logs
 	if scan_from <= leaderSendLastIndex {
-		rf.appendLogs(args.Entries[scan_from-args.PrevLogIndex-1:])
+		rf.appendManyLogs(args.Entries[scan_from-args.PrevLogIndex-1:])
 	}
 
+	//try to commit
 	to_commit := args.LeaderCommit
 	if to_commit > rf.lastLogIndex {
 		to_commit = rf.lastLogIndex
@@ -518,7 +518,6 @@ func (rf *Raft) Append(args *AppendArgs, reply *AppendReply) {
 
 		rf.commitIndex = to_commit
 		if rf.commitIndex > rf.lastApplied {
-			//rf.DApply("signal sent\n")
 			rf.applyCond.Signal()
 		}
 
@@ -557,7 +556,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	}
 	term = rf.currentTerm
 
-	rf.appendLog(LogEntry{
+	rf.appendOneLog(LogEntry{
 		Term:    term,
 		Command: command,
 	})
@@ -566,8 +565,10 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.mu.Unlock()
 
 	go func() {
+		//hang on a while, there might be several Start() calls after this
+		//one signal is enough for all Start() calls
 		time.Sleep(3 * time.Millisecond)
-		rf.clientReqCond.Broadcast()
+		rf.wakeLeaderCond.Broadcast()
 	}()
 
 	return index, term, true
@@ -607,6 +608,7 @@ func (rf *Raft) ticker() {
 	}
 }
 
+//apply logs
 func (rf *Raft) applier() {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -664,7 +666,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	rf.applyCond = sync.NewCond(&rf.mu)
-	rf.clientReqCond = sync.NewCond(&rf.mu)
+	rf.wakeLeaderCond = sync.NewCond(&rf.mu)
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
