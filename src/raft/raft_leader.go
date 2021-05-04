@@ -82,7 +82,7 @@ func (rf *Raft) spawnPeerSyncers(term int, done chan bool) {
 						//lastLogIndex >= prevLogIndex + 1
 						//now we must send logs or send install snapshot
 						rf.AssertTrue(rf.nextIndex[peer] > rf.matchIndex[peer], "term %d for S%d next %d match %d\n",
-							peer, rf.nextIndex[peer], rf.matchIndex[peer])
+							term, peer, rf.nextIndex[peer], rf.matchIndex[peer])
 
 						prevLogIndex := rf.nextIndex[peer] - 1
 						if prevLogIndex < rf.offset {
@@ -205,14 +205,14 @@ func (rf *Raft) getNextIndex(xTerm, xIndex, xLen int) int {
 func (rf *Raft) doAppendRPC(peer, term int, args *AppendArgs) {
 	if len(args.Entries) == 0 {
 		rf.DLeader("term %d leader append to S%d []\n",
-			rf.currentTerm, peer)
+			term, peer)
 	} else if len(args.Entries) == 1 {
 		rf.DLeader("term %d leader append to S%d [%d]\n",
-			rf.currentTerm, peer,
+			term, peer,
 			args.PrevLogIndex+1)
 	} else {
 		rf.DLeader("term %d leader append to S%d [%d->%d]\n",
-			rf.currentTerm, peer, args.PrevLogIndex+1, args.PrevLogIndex+len(args.Entries))
+			term, peer, args.PrevLogIndex+1, args.PrevLogIndex+len(args.Entries))
 	}
 
 	reply := AppendReply{
@@ -236,7 +236,7 @@ func (rf *Raft) doInstallRPC(peer, term int, args *InstallSnapArgs) {
 	}
 
 	rf.DLeader("term %d leader install snap to S%d,offset %d\n",
-		rf.currentTerm, peer, rf.offset)
+		term, peer, args.LastIncludedIndex)
 	ok := rf.sendInstallSnapshot(peer, args, &reply)
 	if !ok || rf.killed() {
 		return
@@ -270,7 +270,7 @@ func (rf *Raft) checkAppendRPC(term, peer int, reply *AppendReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	rf.DLeader("term %d got S%d term %d append reply\n",
-		rf.currentTerm, peer, reply.Term)
+		term, peer, reply.Term)
 
 	if reply.Term > rf.currentTerm {
 		rf.toHigherTermWithLock(reply.Term)
@@ -292,12 +292,12 @@ func (rf *Raft) checkAppendRPC(term, peer int, reply *AppendReply) {
 	//check if this is a outdated msg
 	if rf.matchIndex[peer] >= expectNextIndex {
 		rf.DLeader("term %d leader reject append conflict,next %d but match is %d\n ",
-			rf.currentTerm, expectNextIndex, rf.matchIndex[peer])
+			term, expectNextIndex, rf.matchIndex[peer])
 		return
 	}
 
 	rf.nextIndex[peer] = expectNextIndex
 	rf.DLeader("term %d leader updated S%d nextIndex to %d \n",
-		rf.currentTerm, peer, expectNextIndex)
+		term, peer, expectNextIndex)
 
 }
