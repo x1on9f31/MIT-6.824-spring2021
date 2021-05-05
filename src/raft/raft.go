@@ -8,6 +8,7 @@ import (
 
 	"6.824/labgob"
 	"6.824/labrpc"
+	logger "6.824/raft-logs"
 )
 
 const (
@@ -48,7 +49,7 @@ type Raft struct {
 	applyCond      *sync.Cond
 	wakeLeaderCond *sync.Cond
 	timerLock      sync.Mutex
-
+	logger         logger.TopicLogger
 	//protected by atomic
 	dead int32 // set by Kill()
 
@@ -92,7 +93,7 @@ func (rf *Raft) GetState() (int, bool) {
 //hold lock
 func (rf *Raft) doPersistRaftAndSnap(index, term int, snapshot []byte) {
 
-	rf.DSnap("term %d apply snapshot offset %d->%d \n",
+	rf.logger.L(logger.Snap, "term %d apply snapshot offset %d->%d \n",
 		rf.currentTerm, rf.offset, index)
 
 	if index > rf.commitIndex {
@@ -149,18 +150,18 @@ func (rf *Raft) readPersist(data []byte) {
 		d.Decode(&votedFor) != nil ||
 		d.Decode(&offset) != nil ||
 		d.Decode(&lastLogIndex) != nil {
-		rf.DPersist("read persist error\n")
+		rf.logger.L(logger.Persist, "read persist error\n")
 	} else {
 		logs := make([]LogEntry, lastLogIndex-offset)
 		if d.Decode(&logs) != nil {
-			rf.DPersist("read persist logs error\n")
+			rf.logger.L(logger.Persist, "read persist logs error\n")
 		} else {
 			rf.currentTerm = currentTerm
 			rf.votedFor = votedFor
 			rf.offset = offset
 			rf.lastLogIndex = lastLogIndex
 			rf.logs = logs
-			rf.DPersist("read persist ok\n")
+			rf.logger.L(logger.Persist, "read persist ok\n")
 		}
 	}
 }
@@ -176,11 +177,11 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 	defer rf.mu.Unlock()
 
 	if rf.lastApplied >= lastIncludedIndex {
-		rf.DSnap("cond install false lastApplied:%d includeIndex:%d\n",
+		rf.logger.L(logger.Snap, "cond install false lastApplied:%d includeIndex:%d\n",
 			rf.lastApplied, lastIncludedIndex)
 		return false
 	}
-	rf.DSnap("cond install return true lastApplied:%d includeIndex:%d\n",
+	rf.logger.L(logger.Snap, "cond install return true lastApplied:%d includeIndex:%d\n",
 		rf.lastApplied, lastIncludedIndex)
 	rf.doPersistRaftAndSnap(lastIncludedIndex, lastIncludedTerm, snapshot)
 	return true
@@ -203,7 +204,7 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapArgs, reply *InstallSnapReply) 
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	defer func() { reply.Term = rf.currentTerm }()
-	rf.DSnap("term %d recv term %d installSnap:%d, myLast:%d\n",
+	rf.logger.L(logger.Snap, "term %d recv term %d installSnap:%d, myLast:%d\n",
 		rf.currentTerm, args.Term, args.LastIncludedIndex, rf.lastLogIndex)
 	if args.Term < rf.currentTerm {
 		return
@@ -217,14 +218,14 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapArgs, reply *InstallSnapReply) 
 	reply.Term = rf.currentTerm
 	if rf.lastApplied >= args.LastIncludedIndex {
 
-		rf.DSnap("ignore install index %d for applied %d\n",
+		rf.logger.L(logger.Snap, "ignore install index %d for applied %d\n",
 			rf.lastApplied, args.LastIncludedIndex)
 		return
 	}
 
 	rf.freshTimer()
 	go func() {
-		rf.DSnap("write snap to chan index %d\n",
+		rf.logger.L(logger.Snap, "write snap to chan index %d\n",
 			args.LastIncludedIndex)
 		rf.applyCh <- ApplyMsg{
 			CommandValid:  false,
@@ -244,7 +245,7 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapArgs, reply *InstallSnapReply) 
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	// Your code here (2D).
 	rf.mu.Lock()
-	rf.DSnap("term %d service snap, logs -> [%d->%d]\n", rf.currentTerm, index+1, rf.lastLogIndex)
+	rf.logger.L(logger.Snap, "term %d service snap, logs -> [%d->%d]\n", rf.currentTerm, index+1, rf.lastLogIndex)
 
 	term := rf.logs[index-rf.offset].Term
 	rf.doPersistRaftAndSnap(index, term, snapshot)
@@ -288,7 +289,7 @@ func (rf *Raft) deleteTailLogs(from int) {
 	rf.AssertTrue(from > 0 && from <= rf.lastLogIndex,
 		"from:%d lastLog:%d\n", from, rf.lastLogIndex)
 
-	rf.DLog("term %d delete logs [%d->%d]\n", rf.currentTerm, rf.lastLogIndex, from-1)
+	rf.logger.L(logger.Log1, "term %d delete logs [%d->%d]\n", rf.currentTerm, rf.lastLogIndex, from-1)
 	rf.logs = append([]LogEntry{}, rf.logs[:from-rf.offset]...)
 	rf.lastLogIndex = from - 1
 	rf.persist()
@@ -298,16 +299,16 @@ func (rf *Raft) deleteTailLogs(from int) {
 func (rf *Raft) appendManyLogs(logs []LogEntry) {
 
 	rf.lastLogIndex += len(logs)
-	rf.DLog("term %d ++%d logs [tail->%d]\n", rf.currentTerm, len(logs), rf.lastLogIndex)
+	rf.logger.L(logger.Log1, "term %d ++%d logs [tail->%d]\n", rf.currentTerm, len(logs), rf.lastLogIndex)
 	rf.logs = append(rf.logs, logs...)
 	rf.persist()
 }
 
 //hold lock
-func (rf *Raft) appendOneLog(log LogEntry) {
+func (rf *Raft) appendOneLog(logEntry LogEntry) {
 	rf.lastLogIndex += 1
-	rf.DLog("term %d ++1 log [tail->%d]\n", rf.currentTerm, rf.lastLogIndex)
-	rf.logs = append(rf.logs, log)
+	rf.logger.L(logger.Log1, "term %d ++1 log [tail->%d]\n", rf.currentTerm, rf.lastLogIndex)
+	rf.logs = append(rf.logs, logEntry)
 	rf.persist()
 }
 
@@ -316,7 +317,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	defer func() { reply.Term = rf.currentTerm }()
-	rf.DVote("term %d recv term %d voteReq to S%d \n",
+	rf.logger.L(logger.Vote, "term %d recv term %d voteReq to S%d \n",
 		rf.currentTerm, args.Term, args.CandidateId)
 
 	if args.Term < rf.currentTerm {
@@ -329,7 +330,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	}
 	if rf.role == LEADER {
 		reply.VoteGranted = false
-		rf.DVote("term %d as leader reject to vote S%d\n",
+		rf.logger.L(logger.Vote, "term %d as leader reject to vote S%d\n",
 			rf.currentTerm, args.CandidateId)
 		return
 	}
@@ -344,16 +345,16 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		reply.VoteGranted = true
 		rf.freshTimer()
 		rf.votedFor = args.CandidateId
-		rf.DVote("term %d vote to S%d \n",
+		rf.logger.L(logger.Vote, "term %d vote to S%d \n",
 			rf.currentTerm, args.CandidateId)
 		rf.persist()
 	} else {
 		reply.VoteGranted = false
 		if rf.votedFor != -1 {
-			rf.DVote("term %d reject to vote S%d for voted S%d\n",
+			rf.logger.L(logger.Vote, "term %d reject to vote S%d for voted S%d\n",
 				rf.currentTerm, args.CandidateId, rf.votedFor)
 		} else {
-			rf.DVote("term %dreject to vote S%d for log cmp, [t%d,i%d] > [t%d,i%d] \n",
+			rf.logger.L(logger.Vote, "term %dreject to vote S%d for log cmp, [t%d,i%d] > [t%d,i%d] \n",
 				rf.currentTerm, args.CandidateId,
 				selfTerm, selfIndex, args.LastLogTerm, args.LastLogIndex)
 		}
@@ -362,7 +363,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 //with lock and hold lock
 func (rf *Raft) toHigherTermWithLock(term int) {
-	rf.DTerm("term change %d-->%d\n", rf.currentTerm, term)
+	rf.logger.L(logger.Term, "term change %d-->%d\n", rf.currentTerm, term)
 	rf.role = FOLLOWER
 	rf.votes = 0
 	//persist 2c
@@ -416,14 +417,14 @@ func (rf *Raft) Append(args *AppendArgs, reply *AppendReply) {
 	leaderSendLastIndex := args.PrevLogIndex + len(args.Entries)
 
 	if len(args.Entries) == 0 {
-		rf.DAppend("term %d recv term %d append []\n", rf.currentTerm,
+		rf.logger.L(logger.Append, "term %d recv term %d append []\n", rf.currentTerm,
 			args.Term)
 	} else if len(args.Entries) == 1 {
-		rf.DAppend("term %d recv term %d append [%d]\n", rf.currentTerm,
+		rf.logger.L(logger.Append, "term %d recv term %d append [%d]\n", rf.currentTerm,
 			args.Term,
 			args.PrevLogIndex+1)
 	} else {
-		rf.DAppend("term %d recv term %d append [%d->%d]\n", rf.currentTerm,
+		rf.logger.L(logger.Append, "term %d recv term %d append [%d->%d]\n", rf.currentTerm,
 			args.Term,
 			args.PrevLogIndex+1, leaderSendLastIndex)
 	}
@@ -448,7 +449,7 @@ func (rf *Raft) Append(args *AppendArgs, reply *AppendReply) {
 	if args.PrevLogIndex > rf.lastLogIndex {
 		reply.XTerm = -1
 		reply.XLen = rf.lastLogIndex + 1
-		rf.DAppend("term %d lastIndex %d, %d's pre [t%d,i%d] lacking pre\n",
+		rf.logger.L(logger.Append, "term %d lastIndex %d, %d's pre [t%d,i%d] lacking pre\n",
 			rf.currentTerm, rf.lastLogIndex, args.LeaderId, args.PrevLogTerm, args.PrevLogIndex)
 		return
 	}
@@ -456,7 +457,7 @@ func (rf *Raft) Append(args *AppendArgs, reply *AppendReply) {
 	//prefix conflict,must d0 rollback, quick rollback case 1 && case 2
 	if args.PrevLogIndex > rf.offset && rf.logs[args.PrevLogIndex-rf.offset].Term != args.PrevLogTerm {
 
-		rf.DAppend("term %d log decline S%d term %d pre[t%d,i%d],for last log's term:%d i:%d\n",
+		rf.logger.L(logger.Append, "term %d log decline S%d term %d pre[t%d,i%d],for last log's term:%d i:%d\n",
 			rf.currentTerm, args.LeaderId, args.Term, args.PrevLogTerm, args.PrevLogIndex,
 			rf.logs[rf.lastLogIndex-rf.offset].Term, rf.lastLogIndex)
 
@@ -464,7 +465,7 @@ func (rf *Raft) Append(args *AppendArgs, reply *AppendReply) {
 		reply.XTerm = rf.logs[args.PrevLogIndex-rf.offset].Term
 		reply.XIndex = rf.findTermFirstIndex(args.PrevLogIndex)
 
-		rf.DAppend("term %d conflict xlen%d xterm%d xindex%d\n",
+		rf.logger.L(logger.Append, "term %d conflict xlen%d xterm%d xindex%d\n",
 			rf.currentTerm, reply.XLen, reply.XTerm, reply.XIndex)
 		return
 	}
@@ -474,7 +475,7 @@ func (rf *Raft) Append(args *AppendArgs, reply *AppendReply) {
 
 	reply.NextIndex = leaderSendLastIndex + 1
 	if leaderSendLastIndex <= rf.lastApplied {
-		rf.DAppend("term %d log %d already applied\n",
+		rf.logger.L(logger.Append, "term %d log %d already applied\n",
 			rf.currentTerm, leaderSendLastIndex)
 		return
 	}
@@ -509,10 +510,10 @@ func (rf *Raft) Append(args *AppendArgs, reply *AppendReply) {
 	}
 	if to_commit > rf.commitIndex {
 		if to_commit == rf.commitIndex+1 {
-			rf.DCommit("term %d commit [%d]\n",
+			rf.logger.L(logger.Commit, "term %d commit [%d]\n",
 				rf.currentTerm, to_commit)
 		} else {
-			rf.DCommit("term %d commit [%d->%d]\n",
+			rf.logger.L(logger.Commit, "term %d commit [%d->%d]\n",
 				rf.currentTerm, rf.commitIndex+1, to_commit)
 		}
 
@@ -523,7 +524,7 @@ func (rf *Raft) Append(args *AppendArgs, reply *AppendReply) {
 
 	}
 
-	rf.DAppend("term %d expect nextindex %d\n", rf.currentTerm, reply.NextIndex)
+	rf.logger.L(logger.Append, "term %d expect nextindex %d\n", rf.currentTerm, reply.NextIndex)
 
 }
 
@@ -561,7 +562,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		Command: command,
 	})
 	index = rf.lastLogIndex
-	rf.DClient("term %d request of index %d\n", term, index)
+	rf.logger.L(logger.Client, "term %d request of index %d\n", term, index)
 	rf.mu.Unlock()
 
 	go func() {
@@ -586,7 +587,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 // should call killed() to check whether it should stop.
 //
 func (rf *Raft) Kill() {
-	rf.D(dLog2, "killed########################\n\n")
+	rf.logger.L(logger.RaftShutdown, "raft killed #######\n")
 	atomic.StoreInt32(&rf.dead, 1)
 	// Your code here, if desired.
 }
@@ -618,10 +619,10 @@ func (rf *Raft) applier() {
 			applyMsgs := make([]*ApplyMsg, length)
 
 			if length == 1 {
-				rf.DApply("term %d apply [%d]\n",
+				rf.logger.L(logger.Apply, "term %d apply [%d]\n",
 					rf.currentTerm, rf.commitIndex)
 			} else {
-				rf.DApply("term %d apply [%d->%d]\n",
+				rf.logger.L(logger.Apply, "term %d apply [%d->%d]\n",
 					rf.currentTerm, rf.lastApplied+1, rf.commitIndex)
 			}
 
@@ -665,11 +666,14 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf := &Raft{}
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	rf.me = me
+	rf.logger = logger.TopicLogger{
+		Me: rf.me,
+	}
 	rf.applyCond = sync.NewCond(&rf.mu)
 	rf.wakeLeaderCond = sync.NewCond(&rf.mu)
 	rf.peers = peers
 	rf.persister = persister
-	rf.me = me
 	rf.peerCnt = len(rf.peers)
 	rf.major = (rf.peerCnt + 1) / 2
 	rf.role = FOLLOWER
@@ -690,7 +694,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.snapshot = persister.ReadSnapshot()
 	rf.commitIndex = rf.offset
 	rf.lastApplied = rf.offset
-	rf.DPersist("init from snap offset %d\n", rf.offset)
+	rf.logger.L(logger.Persist, "init from snap offset %d\n", rf.offset)
 	// start ticker goroutine to start elections
 	go rf.applier()
 	go rf.ticker()

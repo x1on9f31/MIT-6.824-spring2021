@@ -5,6 +5,8 @@ import (
 	// _ "net/http/pprof"
 	"sort"
 	"time"
+
+	logger "6.824/raft-logs"
 )
 
 // func init() {
@@ -32,7 +34,7 @@ func (rf *Raft) doLeaderThing(term int) {
 				rf.wakeLeaderCond.Broadcast()
 				heartBeatsTimer.Reset(HEART_INTERVAL)
 			case <-done:
-				rf.DTimer("term %d leader stop heartTimer\n", term)
+				rf.logger.L(logger.Timer, "term %d leader stop heartTimer\n", term)
 				rf.wakeLeaderCond.Broadcast()
 				return
 			}
@@ -45,7 +47,7 @@ func (rf *Raft) doLeaderThing(term int) {
 
 //hold lock
 func (rf *Raft) spawnPeerSyncers(term int, done chan bool) {
-	rf.DLeader("term %d leader start n threads", term)
+	rf.logger.L(logger.Leader, "term %d leader start n threads", term)
 	for i := 0; i < rf.peerCnt; i++ {
 		if i != rf.me {
 			args := AppendArgs{
@@ -59,7 +61,7 @@ func (rf *Raft) spawnPeerSyncers(term int, done chan bool) {
 			go func(peer int) { //handle single raft peer
 				go rf.doAppendRPC(peer, term, &args) //sync once just after become new leader
 				rf.mu.Lock()
-				defer func() { rf.DLeader("term %d leader for S%d loop closed\n", term, peer) }()
+				defer func() { rf.logger.L(logger.Leader, "term %d leader for S%d loop closed\n", term, peer) }()
 				defer rf.mu.Unlock()
 				defer func() { done <- true }()
 
@@ -69,7 +71,7 @@ func (rf *Raft) spawnPeerSyncers(term int, done chan bool) {
 					if rf.currentTerm != term || rf.role != LEADER {
 						return
 					}
-					rf.DLeader("term %d leader for S%d iter\n", term, peer)
+					rf.logger.L(logger.Leader, "term %d leader for S%d iter\n", term, peer)
 
 					if rf.lastLogIndex < rf.nextIndex[peer] {
 						//no more logs to send, just do it as sending heartbeats
@@ -111,10 +113,10 @@ func getKth(c []int, k int) int {
 func (rf *Raft) appendOkAsLeader(nextIndex, peer int, isAppend bool) {
 
 	if isAppend {
-		rf.DLeader("term %d leader append ok to S%d,nextIndex %d\n",
+		rf.logger.L(logger.Leader, "term %d leader append ok to S%d,nextIndex %d\n",
 			rf.currentTerm, peer, nextIndex)
 	} else {
-		rf.DLeader("term %d leader install ok to S%d,nextIndex %d\n",
+		rf.logger.L(logger.Leader, "term %d leader install ok to S%d,nextIndex %d\n",
 			rf.currentTerm, peer, nextIndex)
 	}
 
@@ -122,11 +124,11 @@ func (rf *Raft) appendOkAsLeader(nextIndex, peer int, isAppend bool) {
 		rf.currentTerm, peer, rf.nextIndex[peer], rf.matchIndex[peer])
 
 	if rf.matchIndex[peer] > nextIndex-1 {
-		rf.DLeader("term %d leader reject append ok: next %d, match %d\n ",
+		rf.logger.L(logger.Leader, "term %d leader reject append ok: next %d, match %d\n ",
 			rf.currentTerm, nextIndex, rf.matchIndex[peer])
 		return
 	} else if rf.matchIndex[peer] == nextIndex-1 {
-		rf.DLeader("term %d leader recv S%d heart %d[] reply\n",
+		rf.logger.L(logger.Leader, "term %d leader recv S%d heart %d[] reply\n",
 			rf.currentTerm, peer, nextIndex-1)
 	}
 
@@ -143,7 +145,7 @@ func (rf *Raft) appendOkAsLeader(nextIndex, peer int, isAppend bool) {
 
 	if major_match > rf.lastLogIndex {
 
-		rf.DLeader("term:%d , major_match:%d  > lastLogIndex:%d, S%d  matchIndex:%d nextIndex:%d->%d\n",
+		rf.logger.L(logger.Leader, "term:%d , major_match:%d  > lastLogIndex:%d, S%d  matchIndex:%d nextIndex:%d->%d\n",
 			rf.currentTerm, major_match, rf.lastLogIndex, peer, rf.matchIndex,
 			rf.nextIndex, nextIndex)
 
@@ -155,10 +157,10 @@ func (rf *Raft) appendOkAsLeader(nextIndex, peer int, isAppend bool) {
 		rf.logs[major_match-rf.offset].Term == rf.currentTerm {
 
 		if major_match == rf.commitIndex+1 {
-			rf.DCommit("term %d leader commit [%d]\n",
+			rf.logger.L(logger.Commit, "term %d leader commit [%d]\n",
 				rf.currentTerm, major_match)
 		} else {
-			rf.DCommit("term %d leader commit [%d->%d]\n",
+			rf.logger.L(logger.Commit, "term %d leader commit [%d->%d]\n",
 				rf.currentTerm, rf.commitIndex+1, major_match)
 		}
 
@@ -204,14 +206,14 @@ func (rf *Raft) getNextIndex(xTerm, xIndex, xLen int) int {
 //send request to raft peers
 func (rf *Raft) doAppendRPC(peer, term int, args *AppendArgs) {
 	if len(args.Entries) == 0 {
-		rf.DLeader("term %d leader append to S%d []\n",
+		rf.logger.L(logger.Leader, "term %d leader append to S%d []\n",
 			term, peer)
 	} else if len(args.Entries) == 1 {
-		rf.DLeader("term %d leader append to S%d [%d]\n",
+		rf.logger.L(logger.Leader, "term %d leader append to S%d [%d]\n",
 			term, peer,
 			args.PrevLogIndex+1)
 	} else {
-		rf.DLeader("term %d leader append to S%d [%d->%d]\n",
+		rf.logger.L(logger.Leader, "term %d leader append to S%d [%d->%d]\n",
 			term, peer, args.PrevLogIndex+1, args.PrevLogIndex+len(args.Entries))
 	}
 
@@ -235,7 +237,7 @@ func (rf *Raft) doInstallRPC(peer, term int, args *InstallSnapArgs) {
 		Term: 0,
 	}
 
-	rf.DLeader("term %d leader install snap to S%d,offset %d\n",
+	rf.logger.L(logger.Leader, "term %d leader install snap to S%d,offset %d\n",
 		term, peer, args.LastIncludedIndex)
 	ok := rf.sendInstallSnapshot(peer, args, &reply)
 	if !ok || rf.killed() {
@@ -250,7 +252,7 @@ func (rf *Raft) doInstallRPC(peer, term int, args *InstallSnapArgs) {
 func (rf *Raft) checkInstallRPC(term, peer, nextIndex int, reply *InstallSnapReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	rf.DLeader("term %d got S%d term %d installSnap reply nextIndex %d\n",
+	rf.logger.L(logger.Leader, "term %d got S%d term %d installSnap reply nextIndex %d\n",
 		rf.currentTerm, peer, reply.Term, nextIndex)
 	if reply.Term > rf.currentTerm {
 		rf.toHigherTermWithLock(reply.Term)
@@ -269,7 +271,7 @@ func (rf *Raft) checkInstallRPC(term, peer, nextIndex int, reply *InstallSnapRep
 func (rf *Raft) checkAppendRPC(term, peer int, reply *AppendReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	rf.DLeader("term %d got S%d term %d append reply\n",
+	rf.logger.L(logger.Leader, "term %d got S%d term %d append reply\n",
 		term, peer, reply.Term)
 
 	if reply.Term > rf.currentTerm {
@@ -291,13 +293,13 @@ func (rf *Raft) checkAppendRPC(term, peer int, reply *AppendReply) {
 
 	//check if this is a outdated msg
 	if rf.matchIndex[peer] >= expectNextIndex {
-		rf.DLeader("term %d leader reject append conflict,next %d but match is %d\n ",
+		rf.logger.L(logger.Leader, "term %d leader reject append conflict,next %d but match is %d\n ",
 			term, expectNextIndex, rf.matchIndex[peer])
 		return
 	}
 
 	rf.nextIndex[peer] = expectNextIndex
-	rf.DLeader("term %d leader updated S%d nextIndex to %d \n",
+	rf.logger.L(logger.Leader, "term %d leader updated S%d nextIndex to %d \n",
 		term, peer, expectNextIndex)
 
 }

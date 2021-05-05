@@ -28,16 +28,15 @@ Good luck to you!
 ## Warning
 we have prevent some logs from printing  
 if you want to enable them  
-goto src/raft/logger.go  
-set these const variables to false  
+goto src/raft-logs/log-common.go   
+function init()   
+add log topics to print_list  
 ```  
-RAFT_IGNORE    = false
-COMMIT_IGNORE  = false //apply,commit
-TIMER_IGNORE   = true  //timer
-LEADER_IGNORE  = true  //leader
-APPEND_IGNORE  = true  //append
-ROLE_IGNORE    = false //term vote
-PERSIST_IGNORE = false //persist log
+print_list := []LogTopic{
+		//Clerk,
+		//Server,
+		//Leader,
+}
 ```  
 
 ## Any other question just email me 1291463831@qq.com

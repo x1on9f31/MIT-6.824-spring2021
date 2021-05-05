@@ -2,29 +2,23 @@ package kvraft
 
 import (
 	"bytes"
-	"log"
 	"sync"
 	"sync/atomic"
 
 	"6.824/labgob"
 	"6.824/labrpc"
 	"6.824/raft"
+	logger "6.824/raft-logs"
 )
 
 const (
-	Debug       = false
-	TYPE_GET    = 0
-	TYPE_PUT    = 1
-	TYPE_APPEND = 2
-	TYPE_OTHER  = 3
+	Debug         = false
+	TYPE_GET      = 0
+	TYPE_PUT      = 1
+	TYPE_APPEND   = 2
+	TYPE_OTHER    = 3
+	LOGGER_IGNORE = true
 )
-
-func DPrintf(format string, a ...interface{}) (n int, err error) {
-	if Debug {
-		log.Printf(format, a...)
-	}
-	return
-}
 
 type Command struct {
 	// Your definitions here.
@@ -49,13 +43,8 @@ type KVServer struct {
 	client_next_seq map[int64]int
 	kv_map          map[string]string
 	lastApplied     int
-
-	reply_chan map[int]chan *Reply
-}
-
-//just for printing logs
-func (kv *KVServer) DServer(format string, a ...interface{}) {
-	raft.DLogger("SVER", kv.me, format, a...)
+	logger          logger.TopicLogger
+	reply_chan      map[int]chan *Reply
 }
 
 //rpc handler
@@ -71,7 +60,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	result := kv.doRequest(&request_arg)
 	reply.Err = result.Err
 	reply.Value = result.Value
-	kv.DServer("[%3d--%d] get return result%#v\n",
+	kv.logger.L(logger.ServerReq, "[%3d--%d] get return result%#v\n",
 		args.ClientID%1000, args.Cmd_Seq, reply)
 
 }
@@ -90,7 +79,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	case "Append":
 		request_arg.OpType = TYPE_APPEND
 	default:
-		kv.DServer("putAppend err type %d from [%3d--%d]\n",
+		kv.logger.L(logger.ServerReq, "putAppend err type %d from [%3d--%d]\n",
 			args.Op, args.ClientID%1000, args.Cmd_Seq)
 	}
 
@@ -98,7 +87,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 
 	reply.Err = reply_arg.Err
 
-	kv.DServer("[%3d--%d] putAppend return result%#v\n",
+	kv.logger.L(logger.ServerReq, "[%3d--%d] putAppend return result%#v\n",
 		args.ClientID%1000, args.Cmd_Seq, reply)
 }
 
@@ -106,11 +95,11 @@ func (kv *KVServer) doRequest(req *Request) *Reply {
 	reply := Reply{}
 
 	kv.mu.Lock()
-	kv.DServer("do request args:%#v \n", req)
+	kv.logger.L(logger.ServerReq, "do request args:%#v \n", req)
 
 	//already applied
 	if kv.checkForResult(req, &reply) {
-		kv.DServer("[%3d--%d] already successed\n",
+		kv.logger.L(logger.ServerReq, "[%3d--%d] already successed\n",
 			req.ClientID%1000, req.Cmd_Seq)
 		kv.mu.Unlock()
 		return &reply
@@ -127,12 +116,12 @@ func (kv *KVServer) doRequest(req *Request) *Reply {
 	index, _, isLeader := kv.rf.Start(command)
 	if !isLeader {
 		reply.Err = "not leader"
-		kv.DServer("declined [%3d--%d] for not leader\n",
+		kv.logger.L(logger.ServerReq, "declined [%3d--%d] for not leader\n",
 			req.ClientID%1000, req.Cmd_Seq)
 		kv.mu.Unlock()
 		return &reply
 	} else {
-		kv.DServer("start [%3d--%d] as leader?\n",
+		kv.logger.L(logger.ServerReq, "start [%3d--%d] as leader?\n",
 			req.ClientID%1000, req.Cmd_Seq)
 	}
 	wait_chan := kv.getWaitChan(index)
@@ -142,11 +131,11 @@ func (kv *KVServer) doRequest(req *Request) *Reply {
 
 	kv.mu.Lock()
 	if kv.checkForResult(req, &reply) {
-		kv.DServer("[%3d--%d] successed !!!!! %#v\n",
+		kv.logger.L(logger.ServerReq, "[%3d--%d] successed !!!!! %#v\n",
 			req.ClientID%1000, req.Cmd_Seq, result)
 	} else {
 		reply.Err = "failed"
-		kv.DServer("[%3d--%d] failed applied %#v\n",
+		kv.logger.L(logger.ServerReq, "[%3d--%d] failed applied %#v\n",
 			req.ClientID%1000, req.Cmd_Seq, result)
 	}
 	kv.mu.Unlock()
@@ -164,7 +153,7 @@ func (kv *KVServer) doRequest(req *Request) *Reply {
 // to suppress debug output from a Kill()ed instance.
 //
 func (kv *KVServer) Kill() {
-	kv.DServer("server killed#############\n")
+	kv.logger.L(logger.ServerShutdown, "server killed######\n")
 	atomic.StoreInt32(&kv.dead, 1)
 	kv.rf.Kill()
 	// Your code here, if desired.
@@ -200,11 +189,11 @@ func (kv *KVServer) applier() {
 		m := <-kv.applyCh
 		kv.mu.Lock()
 		if m.SnapshotValid { //snapshot
-			kv.DServer("recv Installsnapshot %v %v\n", m.SnapshotIndex, kv.lastApplied)
+			kv.logger.L(logger.ServerSnap, "recv Installsnapshot %v %v\n", m.SnapshotIndex, kv.lastApplied)
 			if kv.rf.CondInstallSnapshot(m.SnapshotTerm,
 				m.SnapshotIndex, m.Snapshot) {
 				old_apply := kv.lastApplied
-				kv.DServer("decide Installsnapshot %v <- %v\n", m.SnapshotIndex, kv.lastApplied)
+				kv.logger.L(logger.ServerSnap, "decide Installsnapshot %v <- %v\n", m.SnapshotIndex, kv.lastApplied)
 				kv.applyInstallSnapshot(m.Snapshot)
 				for i := old_apply + 1; i <= m.SnapshotIndex; i++ {
 					if kv.reply_chan[m.CommandIndex] != nil {
@@ -213,7 +202,7 @@ func (kv *KVServer) applier() {
 				}
 			}
 		} else if m.CommandValid && m.CommandIndex == 1+kv.lastApplied {
-			kv.DServer("apply %d %#v lastApplied %v\n", m.CommandIndex, m.Command, kv.lastApplied)
+			kv.logger.L(logger.ServerApply, "apply %d %#v lastApplied %v\n", m.CommandIndex, m.Command, kv.lastApplied)
 
 			kv.lastApplied = m.CommandIndex
 			v, ok := m.Command.(Command)
@@ -232,11 +221,11 @@ func (kv *KVServer) applier() {
 
 		} else if m.CommandValid && m.CommandIndex != 1+kv.lastApplied {
 			// out of order cmd, just ignore
-			kv.DServer("ignore apply %v for lastApplied %v\n",
+			kv.logger.L(logger.ServerApply, "ignore apply %v for lastApplied %v\n",
 				m.CommandIndex, kv.lastApplied)
 		} else {
 			// wrong command
-			kv.DServer("Invalid apply msg\n")
+			kv.logger.L(logger.ServerApply, "Invalid apply msg\n")
 		}
 
 		kv.mu.Unlock()
@@ -263,7 +252,7 @@ func (kv *KVServer) applyCommand(v Command) {
 //hold lock
 func (kv *KVServer) applyInstallSnapshot(snap []byte) {
 	if snap == nil || len(snap) < 1 { // bootstrap without any state?
-		kv.DServer("empty snap\n")
+		kv.logger.L(logger.ServerSnap, "empty snap\n")
 		return
 	}
 
@@ -275,7 +264,7 @@ func (kv *KVServer) applyInstallSnapshot(snap []byte) {
 	if d.Decode(&lastIndex) != nil ||
 		d.Decode(&client_to_nextseq_map) != nil ||
 		d.Decode(&kv_map) != nil {
-		kv.DServer("apply install decode err\n")
+		kv.logger.L(logger.ServerSnap, "apply install decode err\n")
 		panic("err decode snap")
 	} else {
 		kv.lastApplied = lastIndex
@@ -287,7 +276,7 @@ func (kv *KVServer) applyInstallSnapshot(snap []byte) {
 
 //hold lock
 func (kv *KVServer) doSnapshotForRaft(index int) {
-	kv.DServer("do snapshot for raft %v %v\n", index, kv.lastApplied)
+	kv.logger.L(logger.ServerSnap, "do snapshot for raft %v %v\n", index, kv.lastApplied)
 
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
@@ -306,8 +295,8 @@ func (kv *KVServer) needSnapshot() bool {
 		return false
 	}
 	size := kv.persister.RaftStateSize()
-	if size >= kv.maxraftstate*2/3-1 {
-		kv.DServer("used size: %d / %d \n", size, kv.maxraftstate)
+	if size >= kv.maxraftstate {
+		kv.logger.L(logger.ServerSnapSize, "used size: %d / %d \n", size, kv.maxraftstate)
 		return true
 	}
 	return false
@@ -336,6 +325,10 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 	kv.me = me
+	kv.logger = logger.TopicLogger{
+		Me: kv.me,
+	}
+
 	kv.maxraftstate = maxraftstate
 	kv.persister = persister
 	// You may need initialization code here.

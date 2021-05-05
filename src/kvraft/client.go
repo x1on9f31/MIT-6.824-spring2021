@@ -2,12 +2,12 @@ package kvraft
 
 import (
 	"crypto/rand"
-	"fmt"
 	"math/big"
 	"sync"
 	"time"
 
 	"6.824/labrpc"
+	logger "6.824/raft-logs"
 )
 
 var used_ID map[int64]bool
@@ -35,6 +35,7 @@ type Clerk struct {
 	// You will have to modify this struct.
 	id        int64
 	serverCnt int
+	logger    logger.TopicLogger
 
 	cmd_seq    int
 	lastLeader int
@@ -53,8 +54,9 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck.serverCnt = len(servers)
 	ck.id = getUnusedClientID()
 	ck.cmd_seq = 0
+	ck.logger = logger.TopicLogger{Me: int(ck.id) % 1000}
 	// You'll have to add code here.
-	time.Sleep(1 * time.Second)
+	// time.Sleep(1 * time.Second)
 	return ck
 }
 
@@ -100,7 +102,7 @@ func (ck *Clerk) Get(key string) string {
 		case <-timer.C:
 		case reply := <-done:
 			if reply.Err == "" {
-				fmt.Printf("[%3d--%d] clerk get okkkkk : %v\n", ck.id%1000, args.Cmd_Seq, reply.Value)
+				ck.logger.L(logger.Clerk, "[%d] clerk get okkkkk : %v\n", args.Cmd_Seq, reply.Value)
 
 				ck.cmd_seq++
 
@@ -155,7 +157,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		case <-timer.C:
 		case reply := <-done:
 			if reply.Err == "" {
-				fmt.Printf("[%3d--%d] clerk putAppend okkkkk\n", ck.id%1000, args.Cmd_Seq)
+				ck.logger.L(logger.Clerk, "[%d] clerk putAppend okkkkk\n", args.Cmd_Seq)
 
 				ck.cmd_seq++
 

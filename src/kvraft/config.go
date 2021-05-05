@@ -1,20 +1,24 @@
 package kvraft
 
-import "6.824/labrpc"
-import "testing"
-import "os"
+import (
+	"os"
+	"testing"
 
-// import "log"
-import crand "crypto/rand"
-import "math/big"
-import "math/rand"
-import "encoding/base64"
-import "sync"
-import "runtime"
-import "6.824/raft"
-import "fmt"
-import "time"
-import "sync/atomic"
+	"6.824/labrpc"
+
+	// import "log"
+	crand "crypto/rand"
+	"encoding/base64"
+	"fmt"
+	"math/big"
+	"math/rand"
+	"runtime"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"6.824/raft"
+)
 
 func randstring(n int) string {
 	b := make([]byte, 2*n)
@@ -254,6 +258,9 @@ func (cfg *config) DisconnectClient(ck *Clerk, from []int) {
 // Shutdown a server by isolating it
 func (cfg *config) ShutdownServer(i int) {
 	cfg.mu.Lock()
+
+	// (&logger.TopicLogger{Me: i}).L(logger.Cfg, "shutdown\n")
+
 	defer cfg.mu.Unlock()
 
 	cfg.disconnectUnlocked(i, cfg.All())

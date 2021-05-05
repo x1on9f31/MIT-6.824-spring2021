@@ -1,19 +1,17 @@
 package raft
 
 import (
-	"log"
+	"fmt"
 	"math/rand"
 	"time"
+
+	logger "6.824/raft-logs"
 )
 
-// Debugging
-const Debug = false
-
-func DPrintf(format string, a ...interface{}) (n int, err error) {
-	if Debug {
-		log.Printf(format, a...)
+func (rf *Raft) AssertTrue(test bool, format string, a ...interface{}) {
+	if !test {
+		panic(fmt.Sprintf(fmt.Sprintf("S%d ", rf.me)+format, a...))
 	}
-	return
 }
 
 func getRandomElectionTimeout() time.Duration {
@@ -43,7 +41,7 @@ func (rf *Raft) sleepTimeout() {
 //hold lock(rf.mu)
 func (rf *Raft) freshTimer() {
 	rf.timerLock.Lock()
-	rf.DTimer("timer freshed\n")
+	rf.logger.L(logger.Timer, "timer freshed\n")
 	defer rf.timerLock.Unlock()
 	rf.timeDdl = time.Now().Add(getRandomElectionTimeout())
 }
