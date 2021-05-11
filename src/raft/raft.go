@@ -663,6 +663,7 @@ func (rf *Raft) applier() {
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
 	//init
+	labgob.Register(LogEntry{})
 	rf := &Raft{}
 	rf.mu.Lock()
 	defer rf.mu.Unlock()

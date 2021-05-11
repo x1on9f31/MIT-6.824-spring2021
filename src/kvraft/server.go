@@ -24,11 +24,10 @@ type Command struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
-	ClientID int64
-	Cmd_Seq  int
-	OpType   int
-	Key      string
-	Value    string
+	ClientID      int64
+	Cmd_Seq       int
+	OperationType int
+	Operation     interface{} //not reference
 }
 
 type KVServer struct {
@@ -44,20 +43,20 @@ type KVServer struct {
 	kv_map          map[string]string
 	lastApplied     int
 	logger          logger.TopicLogger
-	reply_chan      map[int]chan *Reply
+	reply_chan      map[int]chan bool
 }
 
 //rpc handler
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
-	request_arg := Request{
-		OpType:   TYPE_GET,
-		Key:      args.Key,
-		ClientID: args.ClientID,
-		Cmd_Seq:  args.Cmd_Seq,
+	request_arg := Command{
+		OperationType: TYPE_GET,
+		Operation:     args.Key,
+		ClientID:      args.ClientID,
+		Cmd_Seq:       args.Cmd_Seq,
 	}
 
-	result := kv.doRequest(&request_arg)
+	result := kv.doRequest(&request_arg).(*GetReply)
 	reply.Err = result.Err
 	reply.Value = result.Value
 	kv.logger.L(logger.ServerReq, "[%3d--%d] get return result%#v\n",
@@ -67,23 +66,25 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
-	request_arg := Request{
-		Key:      args.Key,
-		Value:    args.Value,
+	request_arg := Command{
+		Operation: KeyValue{
+			Key:   args.Key,
+			Value: args.Value,
+		},
 		ClientID: args.ClientID,
 		Cmd_Seq:  args.Cmd_Seq,
 	}
 	switch args.Op {
 	case "Put":
-		request_arg.OpType = TYPE_PUT
+		request_arg.OperationType = TYPE_PUT
 	case "Append":
-		request_arg.OpType = TYPE_APPEND
+		request_arg.OperationType = TYPE_APPEND
 	default:
 		kv.logger.L(logger.ServerReq, "putAppend err type %d from [%3d--%d]\n",
 			args.Op, args.ClientID%1000, args.Cmd_Seq)
 	}
 
-	reply_arg := kv.doRequest(&request_arg) //wait
+	reply_arg := kv.doRequest(&request_arg).(*PutAppendReply) //wait
 
 	reply.Err = reply_arg.Err
 
@@ -91,35 +92,56 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		args.ClientID%1000, args.Cmd_Seq, reply)
 }
 
-func (kv *KVServer) doRequest(req *Request) *Reply {
-	reply := Reply{}
+func (kv *KVServer) getResult(req *Command, err Err) interface{} {
+	if err != OK {
+		if req.OperationType == TYPE_GET {
+			return &GetReply{
+				Err: err,
+			}
+		}
+		if req.OperationType == TYPE_PUT || req.OperationType == TYPE_APPEND {
+			return &PutAppendReply{
+				Err: err,
+			}
+		}
+	}
+
+	if req.OperationType == TYPE_GET {
+		key, _ := req.Operation.(string)
+		return &GetReply{
+			Value: kv.kv_map[key],
+			Err:   OK,
+		}
+	}
+	if req.OperationType == TYPE_PUT || req.OperationType == TYPE_APPEND {
+		return &PutAppendReply{
+			Err: OK,
+		}
+	}
+	return &struct{}{}
+}
+
+//return reference type
+func (kv *KVServer) doRequest(req *Command) interface{} {
 
 	kv.mu.Lock()
 	kv.logger.L(logger.ServerReq, "do request args:%#v \n", req)
 
 	//already applied
-	if kv.checkForResult(req, &reply) {
+	if kv.hasResult(req.ClientID, req.Cmd_Seq) {
 		kv.logger.L(logger.ServerReq, "[%3d--%d] already successed\n",
 			req.ClientID%1000, req.Cmd_Seq)
+
 		kv.mu.Unlock()
-		return &reply
+		return kv.getResult(req, OK)
 	}
 
-	//not applied, need proposal
-	command := Command{
-		Cmd_Seq:  req.Cmd_Seq,
-		ClientID: req.ClientID,
-		OpType:   req.OpType,
-		Key:      req.Key,
-		Value:    req.Value,
-	}
-	index, _, isLeader := kv.rf.Start(command)
+	index, _, isLeader := kv.rf.Start(req)
 	if !isLeader {
-		reply.Err = "not leader"
 		kv.logger.L(logger.ServerReq, "declined [%3d--%d] for not leader\n",
 			req.ClientID%1000, req.Cmd_Seq)
 		kv.mu.Unlock()
-		return &reply
+		return kv.getResult(req, ErrWrongLeader)
 	} else {
 		kv.logger.L(logger.ServerReq, "start [%3d--%d] as leader?\n",
 			req.ClientID%1000, req.Cmd_Seq)
@@ -130,16 +152,19 @@ func (kv *KVServer) doRequest(req *Request) *Reply {
 	result := <-wait_chan //等待
 
 	kv.mu.Lock()
-	if kv.checkForResult(req, &reply) {
+	if kv.hasResult(req.ClientID, req.Cmd_Seq) {
 		kv.logger.L(logger.ServerReq, "[%3d--%d] successed !!!!! %#v\n",
 			req.ClientID%1000, req.Cmd_Seq, result)
+		kv.mu.Unlock()
+		return kv.getResult(req, OK)
 	} else {
-		reply.Err = "failed"
+
 		kv.logger.L(logger.ServerReq, "[%3d--%d] failed applied %#v\n",
 			req.ClientID%1000, req.Cmd_Seq, result)
+		kv.mu.Unlock()
+		return kv.getResult(req, ErrNoKey)
 	}
-	kv.mu.Unlock()
-	return &reply
+
 }
 
 //
@@ -165,20 +190,17 @@ func (kv *KVServer) killed() bool {
 }
 
 //hold lock,check if there is an avaliable result
-func (kv *KVServer) checkForResult(req *Request, reply *Reply) bool {
-	if kv.client_next_seq[req.ClientID] > req.Cmd_Seq {
-		if req.OpType == TYPE_GET {
-			reply.Value = kv.kv_map[req.Key]
-		}
+func (kv *KVServer) hasResult(ClientID int64, Cmd_Seq int) bool {
+	if kv.client_next_seq[ClientID] > Cmd_Seq {
 		return true
 	}
 	return false
 }
 
 //hold lock, get a channel to read result
-func (kv *KVServer) getWaitChan(index int) chan *Reply {
+func (kv *KVServer) getWaitChan(index int) chan bool {
 	if kv.reply_chan[index] == nil {
-		kv.reply_chan[index] = make(chan *Reply, 1)
+		kv.reply_chan[index] = make(chan bool, 1)
 	}
 	return kv.reply_chan[index]
 }
@@ -197,7 +219,7 @@ func (kv *KVServer) applier() {
 				kv.applyInstallSnapshot(m.Snapshot)
 				for i := old_apply + 1; i <= m.SnapshotIndex; i++ {
 					if kv.reply_chan[m.CommandIndex] != nil {
-						kv.reply_chan[m.CommandIndex] <- &Reply{}
+						kv.reply_chan[m.CommandIndex] <- true
 					}
 				}
 			}
@@ -216,7 +238,7 @@ func (kv *KVServer) applier() {
 				kv.doSnapshotForRaft(m.CommandIndex)
 			}
 			if kv.reply_chan[m.CommandIndex] != nil {
-				kv.reply_chan[m.CommandIndex] <- &Reply{}
+				kv.reply_chan[m.CommandIndex] <- true
 			}
 
 		} else if m.CommandValid && m.CommandIndex != 1+kv.lastApplied {
@@ -242,11 +264,15 @@ func (kv *KVServer) applyCommand(v Command) {
 	}
 
 	kv.client_next_seq[v.ClientID]++
-	if v.OpType == TYPE_PUT {
-		kv.kv_map[v.Key] = v.Value
-	} else if v.OpType == TYPE_APPEND {
-		kv.kv_map[v.Key] += v.Value
+	if v.OperationType == TYPE_PUT || v.OperationType == TYPE_APPEND {
+		keyValue := v.Operation.(KeyValue)
+		if v.OperationType == TYPE_PUT {
+			kv.kv_map[keyValue.Key] = keyValue.Value
+		} else if v.OperationType == TYPE_APPEND {
+			kv.kv_map[keyValue.Key] += keyValue.Value
+		}
 	}
+
 }
 
 //hold lock
@@ -320,6 +346,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
 	labgob.Register(Command{})
+	labgob.Register(KeyValue{})
 
 	kv := new(KVServer)
 	kv.mu.Lock()
@@ -336,7 +363,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 	// You may need initialization code here.
 
-	kv.reply_chan = make(map[int]chan *Reply)
+	kv.reply_chan = make(map[int]chan bool)
 	kv.lastApplied = 0
 	kv.kv_map = make(map[string]string)
 	kv.client_next_seq = make(map[int64]int)

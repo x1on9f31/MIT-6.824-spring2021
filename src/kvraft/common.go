@@ -36,14 +36,7 @@ type GetReply struct {
 	Value string
 }
 
-type Request struct {
-	OpType   int
-	Key      string
-	Value    string
-	ClientID int64
-	Cmd_Seq  int
-}
-type Reply struct {
-	Err   Err
+type KeyValue struct {
+	Key   string
 	Value string
 }

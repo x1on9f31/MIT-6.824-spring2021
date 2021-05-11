@@ -101,7 +101,7 @@ func (ck *Clerk) Get(key string) string {
 		select {
 		case <-timer.C:
 		case reply := <-done:
-			if reply.Err == "" {
+			if reply.Err == OK {
 				ck.logger.L(logger.Clerk, "[%d] clerk get okkkkk : %v\n", args.Cmd_Seq, reply.Value)
 
 				ck.cmd_seq++
@@ -156,7 +156,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		select {
 		case <-timer.C:
 		case reply := <-done:
-			if reply.Err == "" {
+			if reply.Err == OK {
 				ck.logger.L(logger.Clerk, "[%d] clerk putAppend okkkkk\n", args.Cmd_Seq)
 
 				ck.cmd_seq++
