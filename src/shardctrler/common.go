@@ -39,7 +39,7 @@ type Err string
 type JoinArgs struct {
 	Servers  map[int][]string // new GID -> servers mappings
 	ClientID int64
-	Cmd_Seq  int
+	Seq      int
 }
 
 type JoinReply struct {
@@ -49,7 +49,7 @@ type JoinReply struct {
 type LeaveArgs struct {
 	GIDs     []int
 	ClientID int64
-	Cmd_Seq  int
+	Seq      int
 }
 
 type LeaveReply struct {
@@ -60,7 +60,7 @@ type MoveArgs struct {
 	Shard    int
 	GID      int
 	ClientID int64
-	Cmd_Seq  int
+	Seq      int
 }
 
 type MoveReply struct {
@@ -70,14 +70,14 @@ type MoveReply struct {
 type QueryArgs struct {
 	Num      int // desired config number
 	ClientID int64
-	Cmd_Seq  int
+	Seq      int
 }
 
 type QueryReply struct {
 	WrongLeader bool
 	Config      Config
 }
-type GidShard struct {
+type GIDandShard struct {
 	GID   int
 	Shard int
 }

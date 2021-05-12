@@ -38,7 +38,7 @@ type Clerk struct {
 	// Your data here.
 	id         int64
 	serverCnt  int
-	cmd_seq    int
+	seq        int
 	lastLeader int
 }
 
@@ -54,7 +54,7 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck.servers = servers
 	ck.serverCnt = len(servers)
 	ck.id = getUnusedClientID()
-	ck.cmd_seq = 0
+	ck.seq = 0
 	// Your code here.
 	return ck
 }
@@ -62,7 +62,7 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 func (ck *Clerk) Query(num int) Config {
 	args := &QueryArgs{
 		ClientID: ck.id,
-		Cmd_Seq:  ck.cmd_seq,
+		Seq:      ck.seq,
 		Num:      num,
 	}
 	for {
@@ -73,7 +73,7 @@ func (ck *Clerk) Query(num int) Config {
 			ok := srv.Call("ShardCtrler.Query", args, &reply)
 			if ok && reply.WrongLeader == false {
 				//fmt.Printf("client got %#v\n", reply)
-				ck.cmd_seq++
+				ck.seq++
 				return reply.Config
 			}
 		}
@@ -84,7 +84,7 @@ func (ck *Clerk) Query(num int) Config {
 func (ck *Clerk) Join(servers map[int][]string) {
 	args := &JoinArgs{
 		ClientID: ck.id,
-		Cmd_Seq:  ck.cmd_seq,
+		Seq:      ck.seq,
 		Servers:  servers,
 	}
 	// Your code here.
@@ -98,7 +98,7 @@ func (ck *Clerk) Join(servers map[int][]string) {
 			ok := srv.Call("ShardCtrler.Join", args, &reply)
 			if ok && reply.WrongLeader == false {
 				//fmt.Println(reply)
-				ck.cmd_seq++
+				ck.seq++
 				return
 			}
 		}
@@ -110,7 +110,7 @@ func (ck *Clerk) Leave(gids []int) {
 
 	args := &LeaveArgs{
 		ClientID: ck.id,
-		Cmd_Seq:  ck.cmd_seq,
+		Seq:      ck.seq,
 		GIDs:     gids,
 	}
 	for {
@@ -122,7 +122,7 @@ func (ck *Clerk) Leave(gids []int) {
 			var reply LeaveReply
 			ok := srv.Call("ShardCtrler.Leave", args, &reply)
 			if ok && reply.WrongLeader == false {
-				ck.cmd_seq++
+				ck.seq++
 				return
 			}
 		}
@@ -135,7 +135,7 @@ func (ck *Clerk) Move(shard int, gid int) {
 		Shard:    shard,
 		GID:      gid,
 		ClientID: ck.id,
-		Cmd_Seq:  ck.cmd_seq,
+		Seq:      ck.seq,
 	}
 	// Your code here.
 
@@ -145,7 +145,7 @@ func (ck *Clerk) Move(shard int, gid int) {
 			var reply MoveReply
 			ok := srv.Call("ShardCtrler.Move", args, &reply)
 			if ok && reply.WrongLeader == false {
-				ck.cmd_seq++
+				ck.seq++
 				return
 			}
 		}

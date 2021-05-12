@@ -12,22 +12,21 @@ import (
 )
 
 const (
-	Debug         = false
-	TYPE_GET      = 0
-	TYPE_PUT      = 1
-	TYPE_APPEND   = 2
-	TYPE_OTHER    = 3
-	LOGGER_IGNORE = true
+	Debug       = false
+	TYPE_GET    = 0
+	TYPE_PUT    = 1
+	TYPE_APPEND = 2
+	TYPE_OTHER  = 3
 )
 
 type Command struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
-	ClientID      int64
-	Cmd_Seq       int
-	OperationType int
-	Operation     interface{} //not reference
+	ClientID int64
+	Seq      int
+	OptType  int
+	Opt      interface{} //not reference
 }
 
 type KVServer struct {
@@ -39,112 +38,63 @@ type KVServer struct {
 	maxraftstate int   // snapshot if log grows this big
 	persister    *raft.Persister
 	// Your definitions here.
-	client_next_seq map[int64]int
-	kv_map          map[string]string
-	lastApplied     int
-	logger          logger.TopicLogger
-	reply_chan      map[int]chan bool
+	next_seq    map[int64]int
+	kv_map      map[string]string
+	lastApplied int
+	logger      logger.TopicLogger
+	reply_chan  map[int]chan bool
 }
 
-//rpc handler
-func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
-	// Your code here.
-	request_arg := Command{
-		OperationType: TYPE_GET,
-		Operation:     args.Key,
-		ClientID:      args.ClientID,
-		Cmd_Seq:       args.Cmd_Seq,
-	}
-
-	result := kv.doRequest(&request_arg).(*GetReply)
-	reply.Err = result.Err
-	reply.Value = result.Value
-	kv.logger.L(logger.ServerReq, "[%3d--%d] get return result%#v\n",
-		args.ClientID%1000, args.Cmd_Seq, reply)
-
-}
-
-func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
-	// Your code here.
-	request_arg := Command{
-		Operation: KeyValue{
-			Key:   args.Key,
-			Value: args.Value,
-		},
-		ClientID: args.ClientID,
-		Cmd_Seq:  args.Cmd_Seq,
-	}
-	switch args.Op {
-	case "Put":
-		request_arg.OperationType = TYPE_PUT
-	case "Append":
-		request_arg.OperationType = TYPE_APPEND
-	default:
-		kv.logger.L(logger.ServerReq, "putAppend err type %d from [%3d--%d]\n",
-			args.Op, args.ClientID%1000, args.Cmd_Seq)
-	}
-
-	reply_arg := kv.doRequest(&request_arg).(*PutAppendReply) //wait
-
-	reply.Err = reply_arg.Err
-
-	kv.logger.L(logger.ServerReq, "[%3d--%d] putAppend return result%#v\n",
-		args.ClientID%1000, args.Cmd_Seq, reply)
-}
-
-func (kv *KVServer) getResult(req *Command, err Err) interface{} {
-	if err != OK {
-		if req.OperationType == TYPE_GET {
-			return &GetReply{
-				Err: err,
-			}
-		}
-		if req.OperationType == TYPE_PUT || req.OperationType == TYPE_APPEND {
-			return &PutAppendReply{
-				Err: err,
-			}
-		}
-	}
-
-	if req.OperationType == TYPE_GET {
-		key, _ := req.Operation.(string)
-		return &GetReply{
-			Value: kv.kv_map[key],
-			Err:   OK,
-		}
-	}
-	if req.OperationType == TYPE_PUT || req.OperationType == TYPE_APPEND {
+func (kv *KVServer) getReplyStruct(req *Command, err Err) interface{} {
+	switch req.OptType {
+	case TYPE_APPEND:
+		fallthrough
+	case TYPE_PUT:
 		return &PutAppendReply{
-			Err: OK,
+			Err: err,
 		}
+	case TYPE_GET:
+		reply := &GetReply{
+			Err: err,
+		}
+		if err == OK {
+			reply.Value = kv.kv_map[req.Opt.(string)]
+		}
+		return reply
 	}
-	return &struct{}{}
+	return nil
+}
+
+//hold lock,check if there is an avaliable result
+func (kv *KVServer) hasResult(clientID int64, seq int) bool {
+	return kv.next_seq[clientID] > seq
 }
 
 //return reference type
-func (kv *KVServer) doRequest(req *Command) interface{} {
+func (kv *KVServer) doRequest(command *Command) interface{} {
 
 	kv.mu.Lock()
-	kv.logger.L(logger.ServerReq, "do request args:%#v \n", req)
+	kv.logger.L(logger.ServerReq, "do request args:%#v \n", command)
 
 	//already applied
-	if kv.hasResult(req.ClientID, req.Cmd_Seq) {
+	if kv.hasResult(command.ClientID, command.Seq) {
 		kv.logger.L(logger.ServerReq, "[%3d--%d] already successed\n",
-			req.ClientID%1000, req.Cmd_Seq)
+			command.ClientID%1000, command.Seq)
 
 		kv.mu.Unlock()
-		return kv.getResult(req, OK)
+		return kv.getReplyStruct(command, OK)
 	}
 
-	index, _, isLeader := kv.rf.Start(req)
+	index, _, isLeader := kv.rf.Start(*command)
+
 	if !isLeader {
 		kv.logger.L(logger.ServerReq, "declined [%3d--%d] for not leader\n",
-			req.ClientID%1000, req.Cmd_Seq)
+			command.ClientID%1000, command.Seq)
 		kv.mu.Unlock()
-		return kv.getResult(req, ErrWrongLeader)
+		return kv.getReplyStruct(command, ErrWrongLeader)
 	} else {
-		kv.logger.L(logger.ServerReq, "start [%3d--%d] as leader?\n",
-			req.ClientID%1000, req.Cmd_Seq)
+		kv.logger.L(logger.ServerStart, "start [%3d--%d] as leader?\n",
+			command.ClientID%1000, command.Seq)
 	}
 	wait_chan := kv.getWaitChan(index)
 	kv.mu.Unlock()
@@ -152,17 +102,17 @@ func (kv *KVServer) doRequest(req *Command) interface{} {
 	result := <-wait_chan //等待
 
 	kv.mu.Lock()
-	if kv.hasResult(req.ClientID, req.Cmd_Seq) {
+	if kv.hasResult(command.ClientID, command.Seq) {
 		kv.logger.L(logger.ServerReq, "[%3d--%d] successed !!!!! %#v\n",
-			req.ClientID%1000, req.Cmd_Seq, result)
+			command.ClientID%1000, command.Seq, result)
 		kv.mu.Unlock()
-		return kv.getResult(req, OK)
+		return kv.getReplyStruct(command, OK)
 	} else {
 
 		kv.logger.L(logger.ServerReq, "[%3d--%d] failed applied %#v\n",
-			req.ClientID%1000, req.Cmd_Seq, result)
+			command.ClientID%1000, command.Seq, result)
 		kv.mu.Unlock()
-		return kv.getResult(req, ErrNoKey)
+		return kv.getReplyStruct(command, ErrNoKey)
 	}
 
 }
@@ -187,14 +137,6 @@ func (kv *KVServer) Kill() {
 func (kv *KVServer) killed() bool {
 	z := atomic.LoadInt32(&kv.dead)
 	return z == 1
-}
-
-//hold lock,check if there is an avaliable result
-func (kv *KVServer) hasResult(ClientID int64, Cmd_Seq int) bool {
-	if kv.client_next_seq[ClientID] > Cmd_Seq {
-		return true
-	}
-	return false
 }
 
 //hold lock, get a channel to read result
@@ -230,7 +172,7 @@ func (kv *KVServer) applier() {
 			v, ok := m.Command.(Command)
 			if !ok {
 				//err
-				return
+				panic("not ok assertion in apply!")
 			}
 			kv.applyCommand(v) //may ignore duplicate cmd
 
@@ -239,6 +181,7 @@ func (kv *KVServer) applier() {
 			}
 			if kv.reply_chan[m.CommandIndex] != nil {
 				kv.reply_chan[m.CommandIndex] <- true
+
 			}
 
 		} else if m.CommandValid && m.CommandIndex != 1+kv.lastApplied {
@@ -256,19 +199,19 @@ func (kv *KVServer) applier() {
 }
 func (kv *KVServer) applyCommand(v Command) {
 
-	if kv.client_next_seq[v.ClientID] > v.Cmd_Seq {
+	if kv.next_seq[v.ClientID] > v.Seq {
 		return
 	}
-	if kv.client_next_seq[v.ClientID] != v.Cmd_Seq {
+	if kv.next_seq[v.ClientID] != v.Seq {
 		panic("cmd seq gap!!!")
 	}
 
-	kv.client_next_seq[v.ClientID]++
-	if v.OperationType == TYPE_PUT || v.OperationType == TYPE_APPEND {
-		keyValue := v.Operation.(KeyValue)
-		if v.OperationType == TYPE_PUT {
+	kv.next_seq[v.ClientID]++
+	if v.OptType == TYPE_PUT || v.OptType == TYPE_APPEND {
+		keyValue := v.Opt.(KeyValue)
+		if v.OptType == TYPE_PUT {
 			kv.kv_map[keyValue.Key] = keyValue.Value
-		} else if v.OperationType == TYPE_APPEND {
+		} else if v.OptType == TYPE_APPEND {
 			kv.kv_map[keyValue.Key] += keyValue.Value
 		}
 	}
@@ -294,7 +237,7 @@ func (kv *KVServer) applyInstallSnapshot(snap []byte) {
 		panic("err decode snap")
 	} else {
 		kv.lastApplied = lastIndex
-		kv.client_next_seq = client_to_nextseq_map
+		kv.next_seq = client_to_nextseq_map
 		kv.kv_map = kv_map
 	}
 
@@ -310,7 +253,7 @@ func (kv *KVServer) doSnapshotForRaft(index int) {
 	// e.Encode(v)
 	lastIndex := kv.lastApplied
 	e.Encode(lastIndex)
-	e.Encode(kv.client_next_seq)
+	e.Encode(kv.next_seq)
 	e.Encode(kv.kv_map)
 	kv.rf.Snapshot(index, w.Bytes())
 }
@@ -348,28 +291,25 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	labgob.Register(Command{})
 	labgob.Register(KeyValue{})
 
-	kv := new(KVServer)
+	kv := &KVServer{
+		me: me,
+		logger: logger.TopicLogger{
+			Me: me,
+		},
+		maxraftstate: maxraftstate,
+		persister:    persister,
+		applyCh:      make(chan raft.ApplyMsg, 30),
+		reply_chan:   make(map[int]chan bool),
+		lastApplied:  0,
+		kv_map:       make(map[string]string),
+		next_seq:     make(map[int64]int),
+	}
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
-	kv.me = me
-	kv.logger = logger.TopicLogger{
-		Me: kv.me,
-	}
-
-	kv.maxraftstate = maxraftstate
-	kv.persister = persister
 	// You may need initialization code here.
-	kv.applyCh = make(chan raft.ApplyMsg, 30)
-
 	// You may need initialization code here.
-
-	kv.reply_chan = make(map[int]chan bool)
-	kv.lastApplied = 0
-	kv.kv_map = make(map[string]string)
-	kv.client_next_seq = make(map[int64]int)
 	snap := kv.persister.ReadSnapshot()
 	kv.applyInstallSnapshot(snap)
-
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 	go kv.applier()
 	return kv

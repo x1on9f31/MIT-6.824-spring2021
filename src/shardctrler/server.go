@@ -13,10 +13,10 @@ import (
 
 type Command struct {
 	// Your data here.
-	ClientID      int64
-	Cmd_Seq       int
-	OperationType int
-	Operation     interface{}
+	ClientID int64
+	Seq      int
+	OptType  int
+	Opt      interface{}
 }
 
 const (
@@ -25,7 +25,6 @@ const (
 	TYPE_LEAVE
 	TYPE_MOVE
 	TYPE_QUERY
-	LOGGER_IGNORE = true
 )
 
 type ShardCtrler struct {
@@ -37,19 +36,18 @@ type ShardCtrler struct {
 	maxraftstate int // snapshot if log grows this big
 	persister    *raft.Persister
 	// Your definitions here.
-	client_next_seq map[int64]int
+	next_seq map[int64]int
 
 	lastApplied int
 
 	reply_chan map[int]chan bool
 	logger     logger.TopicLogger
 	// Your data here.
-	lastConfigNum int
-	configs       []Config // indexed by config num
+	configs []Config // indexed by config num
 }
 
-func (sc *ShardCtrler) getResult(req *Command, wrongLeader bool) interface{} {
-	switch req.OperationType {
+func (sc *ShardCtrler) getReplyStruct(optType int, wrongLeader bool) interface{} {
+	switch optType {
 	case TYPE_JOIN:
 		return &JoinReply{
 			WrongLeader: wrongLeader,
@@ -77,35 +75,25 @@ func (sc *ShardCtrler) getResult(req *Command, wrongLeader bool) interface{} {
 }
 
 //return reference type,drop lock
-func (sc *ShardCtrler) doRequest(req *Command) interface{} {
-	sc.logger.L(logger.ServerReq, "do request args:%#v \n", req)
+func (sc *ShardCtrler) doRequest(command *Command) interface{} {
+	// sc.logger.L(logger.CtrlerReq, "do request args:%#v \n", req)
 
 	//already applied
-	if sc.hasResult(req.ClientID, req.Cmd_Seq) {
-		sc.logger.L(logger.ServerReq, "[%3d--%d] already successed\n",
-			req.ClientID%1000, req.Cmd_Seq)
-
+	if ok, res := sc.hasResult(command); ok {
 		sc.mu.Unlock()
-		res := sc.getResult(req, false)
-
-		if req.OperationType == TYPE_QUERY {
-			reply := res.(*QueryReply)
-			reply.Config = *sc.queryConfig(req.Operation.(int))
-			return reply
-		}
 		return res
 	}
 
-	index, _, isLeader := sc.rf.Start(*req) //do things through raft
+	index, _, isLeader := sc.rf.Start(*command) //do things through raft
 
 	if !isLeader {
-		sc.logger.L(logger.ServerReq, "declined [%3d--%d] for not leader\n",
-			req.ClientID%1000, req.Cmd_Seq)
+		sc.logger.L(logger.CtrlerReq, "declined [%3d--%d] for not leader\n",
+			command.ClientID%1000, command.Seq)
 		sc.mu.Unlock()
-		return sc.getResult(req, true)
+		return sc.getReplyStruct(command.OptType, true)
 	} else {
-		sc.logger.L(logger.ServerLeader, "start [%3d--%d] as leader?\n",
-			req.ClientID%1000, req.Cmd_Seq)
+		sc.logger.L(logger.CtrlerStart, "start [%3d--%d] as leader?\n",
+			command.ClientID%1000, command.Seq)
 	}
 	wait_chan := sc.getWaitChan(index)
 	sc.mu.Unlock()
@@ -113,24 +101,15 @@ func (sc *ShardCtrler) doRequest(req *Command) interface{} {
 	result := <-wait_chan //等待
 
 	sc.mu.Lock()
-	if sc.hasResult(req.ClientID, req.Cmd_Seq) {
-		sc.logger.L(logger.ServerReq, "[%3d--%d] successed !!!!! %#v\n",
-			req.ClientID%1000, req.Cmd_Seq, result)
+	if ok, res := sc.hasResult(command); ok {
 		sc.mu.Unlock()
-		res := sc.getResult(req, false)
-		if req.OperationType == TYPE_QUERY {
-			reply := res.(*QueryReply)
-			reply.Config = *sc.queryConfig(req.Operation.(int))
-			return reply
-		}
 		return res
 
 	} else {
-
-		sc.logger.L(logger.ServerReq, "[%3d--%d] failed applied %#v\n",
-			req.ClientID%1000, req.Cmd_Seq, result)
+		sc.logger.L(logger.CtrlerReq, "[%3d--%d] failed applied %#v\n",
+			command.ClientID%1000, command.Seq, result)
 		sc.mu.Unlock()
-		return sc.getResult(req, true)
+		return sc.getReplyStruct(command.OptType, true)
 	}
 
 }
@@ -158,11 +137,21 @@ func (sc *ShardCtrler) killed() bool {
 }
 
 //hold lock,check if there is an avaliable result
-func (sc *ShardCtrler) hasResult(ClientID int64, Cmd_Seq int) bool {
-	if sc.client_next_seq[ClientID] > Cmd_Seq {
-		return true
+func (sc *ShardCtrler) hasResult(req *Command) (bool, interface{}) {
+	if sc.next_seq[req.ClientID] > req.Seq {
+
+		sc.logger.L(logger.CtrlerReq, "[%3d--%d] successed !!!!!\n",
+			req.ClientID%1000, req.Seq)
+
+		res := sc.getReplyStruct(req.OptType, false)
+		if req.OptType == TYPE_QUERY {
+			reply := res.(*QueryReply)
+			reply.Config = *sc.queryConfig(req.Opt.(int))
+			return true, reply
+		}
+		return true, res
 	}
-	return false
+	return false, nil
 }
 
 //hold lock, get a channel to read result
@@ -179,11 +168,11 @@ func (sc *ShardCtrler) applier() {
 		m := <-sc.applyCh
 		sc.mu.Lock()
 		if m.SnapshotValid { //snapshot
-			sc.logger.L(logger.ServerSnap, "recv Installsnapshot %v %v\n", m.SnapshotIndex, sc.lastApplied)
+			sc.logger.L(logger.CtrlerSnap, "recv Installsnapshot %v %v\n", m.SnapshotIndex, sc.lastApplied)
 			if sc.rf.CondInstallSnapshot(m.SnapshotTerm,
 				m.SnapshotIndex, m.Snapshot) {
 				old_apply := sc.lastApplied
-				sc.logger.L(logger.ServerSnap, "decide Installsnapshot %v <- %v\n", m.SnapshotIndex, sc.lastApplied)
+				sc.logger.L(logger.CtrlerSnap, "decide Installsnapshot %v <- %v\n", m.SnapshotIndex, sc.lastApplied)
 				sc.applyInstallSnapshot(m.Snapshot)
 				for i := old_apply + 1; i <= m.SnapshotIndex; i++ {
 					if sc.reply_chan[m.CommandIndex] != nil {
@@ -192,7 +181,7 @@ func (sc *ShardCtrler) applier() {
 				}
 			}
 		} else if m.CommandValid && m.CommandIndex == 1+sc.lastApplied {
-			sc.logger.L(logger.ServerApply, "apply %d %#v lastApplied %v\n", m.CommandIndex, m.Command, sc.lastApplied)
+			sc.logger.L(logger.CtrlerApply, "apply %d %#v lastApplied %v\n", m.CommandIndex, m.Command, sc.lastApplied)
 
 			sc.lastApplied = m.CommandIndex
 
@@ -202,8 +191,8 @@ func (sc *ShardCtrler) applier() {
 				return
 			}
 			sc.applyCommand(v) //may ignore duplicate cmd
-			sc.lastConfigNum = len(sc.configs) - 1
-			sc.logger.L(logger.ServerApply, "lastConfigNum %d last configs :%v\n", sc.lastConfigNum, sc.configs[sc.lastConfigNum])
+
+			sc.logger.L(logger.CtrlerApply, "lastConfigNum %d last configs :%v\n", len(sc.configs)-1, sc.configs[len(sc.configs)-1])
 			if sc.needSnapshot() {
 				sc.doSnapshotForRaft(m.CommandIndex)
 			}
@@ -213,11 +202,11 @@ func (sc *ShardCtrler) applier() {
 
 		} else if m.CommandValid && m.CommandIndex != 1+sc.lastApplied {
 			// out of order cmd, just ignore
-			sc.logger.L(logger.ServerApply, "ignore apply %v for lastApplied %v\n",
+			sc.logger.L(logger.CtrlerApply, "ignore apply %v for lastApplied %v\n",
 				m.CommandIndex, sc.lastApplied)
 		} else {
 			// wrong command
-			sc.logger.L(logger.ServerApply, "Invalid apply msg\n")
+			sc.logger.L(logger.CtrlerApply, "Invalid apply msg\n")
 		}
 
 		sc.mu.Unlock()
@@ -226,37 +215,34 @@ func (sc *ShardCtrler) applier() {
 }
 func (sc *ShardCtrler) applyCommand(v Command) {
 
-	if sc.client_next_seq[v.ClientID] > v.Cmd_Seq {
+	if sc.next_seq[v.ClientID] > v.Seq {
 		return
 	}
-	if sc.client_next_seq[v.ClientID] != v.Cmd_Seq {
+	if sc.next_seq[v.ClientID] != v.Seq {
 		panic("cmd seq gap!!!")
 	}
 
-	sc.client_next_seq[v.ClientID]++
-	//todo
+	sc.next_seq[v.ClientID]++
 
-	if v.OperationType != TYPE_QUERY {
+	if v.OptType != TYPE_QUERY {
 		var new_config *Config
-		switch v.OperationType {
+		switch v.OptType {
 		case TYPE_JOIN:
-			r := v.Operation.(JoinArgs)
-			new_config = sc.balanceJoin(r.Servers)
+			new_config = sc.doJoin(v.Opt.(JoinArgs).Servers)
 		case TYPE_LEAVE:
-			r := v.Operation.([]int)
-			new_config = sc.balanceLeave(r)
+			new_config = sc.doLeave(v.Opt.([]int))
 		case TYPE_MOVE:
-			r := v.Operation.(GidShard)
-			new_config = sc.moveShards(r)
+			new_config = sc.doMove(v.Opt.(GIDandShard))
 		}
 		sc.configs = append(sc.configs, *new_config)
 	}
+
 }
 
 //hold lock
 func (sc *ShardCtrler) applyInstallSnapshot(snap []byte) {
 	if snap == nil || len(snap) < 1 { // bootstrap without any state?
-		sc.logger.L(logger.ServerSnap, "empty snap\n")
+		sc.logger.L(logger.CtrlerSnap, "empty snap\n")
 		return
 	}
 
@@ -268,11 +254,11 @@ func (sc *ShardCtrler) applyInstallSnapshot(snap []byte) {
 	if d.Decode(&lastIndex) != nil ||
 		d.Decode(&client_to_nextseq_map) != nil ||
 		d.Decode(&configs) != nil {
-		sc.logger.L(logger.ServerSnap, "apply install decode err\n")
+		sc.logger.L(logger.CtrlerSnap, "apply install decode err\n")
 		panic("err decode snap")
 	} else {
 		sc.lastApplied = lastIndex
-		sc.client_next_seq = client_to_nextseq_map
+		sc.next_seq = client_to_nextseq_map
 		sc.configs = configs
 	}
 
@@ -280,7 +266,7 @@ func (sc *ShardCtrler) applyInstallSnapshot(snap []byte) {
 
 //hold lock
 func (sc *ShardCtrler) doSnapshotForRaft(index int) {
-	sc.logger.L(logger.ServerSnap, "do snapshot for raft %v %v\n", index, sc.lastApplied)
+	sc.logger.L(logger.CtrlerSnap, "do snapshot for raft %v %v\n", index, sc.lastApplied)
 
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
@@ -288,7 +274,7 @@ func (sc *ShardCtrler) doSnapshotForRaft(index int) {
 	// e.Encode(v)
 	lastIndex := sc.lastApplied
 	e.Encode(lastIndex)
-	e.Encode(sc.client_next_seq)
+	e.Encode(sc.next_seq)
 	e.Encode(sc.configs)
 	sc.rf.Snapshot(index, w.Bytes())
 }
@@ -300,7 +286,7 @@ func (sc *ShardCtrler) needSnapshot() bool {
 	}
 	size := sc.persister.RaftStateSize()
 	if size >= sc.maxraftstate {
-		sc.logger.L(logger.ServerSnapSize, "used size: %d / %d \n", size, sc.maxraftstate)
+		sc.logger.L(logger.CtrlerSnapSize, "used size: %d / %d \n", size, sc.maxraftstate)
 		return true
 	}
 	return false
@@ -321,28 +307,27 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister)
 	labgob.Register(Command{})
 	labgob.Register(Config{})
 	labgob.Register(JoinArgs{})
-	labgob.Register(GidShard{})
-	sc := new(ShardCtrler)
+	labgob.Register(GIDandShard{})
+	sc := &ShardCtrler{
+		me:           me,
+		configs:      make([]Config, 1),
+		maxraftstate: -1,
+		persister:    persister,
+		applyCh:      make(chan raft.ApplyMsg, 30),
+		reply_chan:   make(map[int]chan bool),
+		lastApplied:  0,
+		next_seq:     make(map[int64]int),
+		logger: logger.TopicLogger{
+			Me: me,
+		},
+	}
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
-	sc.me = me
-	sc.logger = logger.TopicLogger{
-		Me: sc.me,
-	}
-	sc.configs = make([]Config, 1)
 	sc.configs[0].Groups = map[int][]string{}
-	sc.maxraftstate = -1
-	sc.persister = persister
-
-	sc.applyCh = make(chan raft.ApplyMsg, 30)
 	sc.rf = raft.Make(servers, me, persister, sc.applyCh)
-	sc.reply_chan = make(map[int]chan bool)
 	// Your code here.
-	sc.lastApplied = 0
-	sc.client_next_seq = make(map[int64]int)
 	snap := sc.persister.ReadSnapshot()
 	sc.applyInstallSnapshot(snap)
-
 	go sc.applier()
 	return sc
 }

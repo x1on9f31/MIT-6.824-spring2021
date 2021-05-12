@@ -37,7 +37,7 @@ type Clerk struct {
 	serverCnt int
 	logger    logger.TopicLogger
 
-	cmd_seq    int
+	seq        int
 	lastLeader int
 }
 
@@ -53,7 +53,7 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck.servers = servers
 	ck.serverCnt = len(servers)
 	ck.id = getUnusedClientID()
-	ck.cmd_seq = 0
+	ck.seq = 0
 	ck.logger = logger.TopicLogger{Me: int(ck.id) % 1000}
 	// You'll have to add code here.
 	// time.Sleep(1 * time.Second)
@@ -83,7 +83,7 @@ func (ck *Clerk) Get(key string) string {
 		}
 		timer := time.NewTimer(time.Millisecond * 100)
 		done := make(chan *GetReply)
-		args.Cmd_Seq = ck.cmd_seq
+		args.Seq = ck.seq
 
 		peer := ck.lastLeader
 		go func(d chan *GetReply) {
@@ -102,9 +102,9 @@ func (ck *Clerk) Get(key string) string {
 		case <-timer.C:
 		case reply := <-done:
 			if reply.Err == OK {
-				ck.logger.L(logger.Clerk, "[%d] clerk get okkkkk : %v\n", args.Cmd_Seq, reply.Value)
+				ck.logger.L(logger.Clerk, "[%d] clerk get okkkkk : %v\n", args.Seq, reply.Value)
 
-				ck.cmd_seq++
+				ck.seq++
 
 				return reply.Value
 			}
@@ -139,7 +139,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		timer := time.NewTimer(time.Millisecond * 100)
 		done := make(chan *PutAppendReply)
 
-		args.Cmd_Seq = ck.cmd_seq
+		args.Seq = ck.seq
 
 		peer := ck.lastLeader
 		go func(d chan *PutAppendReply) {
@@ -157,9 +157,9 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		case <-timer.C:
 		case reply := <-done:
 			if reply.Err == OK {
-				ck.logger.L(logger.Clerk, "[%d] clerk putAppend okkkkk\n", args.Cmd_Seq)
+				ck.logger.L(logger.Clerk, "[%d] clerk putAppend okkkkk\n", args.Seq)
 
-				ck.cmd_seq++
+				ck.seq++
 
 				return
 			}

@@ -45,6 +45,12 @@ func (rf *Raft) freshTimer() {
 	defer rf.timerLock.Unlock()
 	rf.timeDdl = time.Now().Add(getRandomElectionTimeout())
 }
+func (rf *Raft) initTimer() {
+	rf.timerLock.Lock()
+	rf.logger.L(logger.Timer, "timer inited\n")
+	defer rf.timerLock.Unlock()
+	rf.timeDdl = time.Now().Add(time.Duration(rand.Int())%RANDOM_PLUS + time.Millisecond*100)
+}
 
 //send RPC
 func (rf *Raft) sendAppend(server int, args *AppendArgs, reply *AppendReply) bool {

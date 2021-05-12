@@ -161,6 +161,8 @@ func (rf *Raft) readPersist(data []byte) {
 			rf.offset = offset
 			rf.lastLogIndex = lastLogIndex
 			rf.logs = logs
+			rf.commitIndex = rf.offset
+			rf.lastApplied = rf.offset
 			rf.logger.L(logger.Persist, "read persist ok\n")
 		}
 	}
@@ -664,37 +666,34 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
 	//init
 	labgob.Register(LogEntry{})
-	rf := &Raft{}
+	rf := &Raft{
+		me: me,
+		logger: logger.TopicLogger{
+			Me: me,
+		},
+		peers:        peers,
+		persister:    persister,
+		peerCnt:      len(peers),
+		major:        (len(peers) + 1) / 2,
+		role:         FOLLOWER,
+		applyCh:      applyCh,
+		logs:         make([]LogEntry, 1),
+		currentTerm:  0,
+		votedFor:     -1,
+		offset:       0,
+		lastLogIndex: 0,
+		commitIndex:  0,
+		lastApplied:  0,
+		snapshot:     persister.ReadSnapshot(),
+	}
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	rf.me = me
-	rf.logger = logger.TopicLogger{
-		Me: rf.me,
-	}
-	rf.applyCond = sync.NewCond(&rf.mu)
-	rf.wakeLeaderCond = sync.NewCond(&rf.mu)
-	rf.peers = peers
-	rf.persister = persister
-	rf.peerCnt = len(rf.peers)
-	rf.major = (rf.peerCnt + 1) / 2
-	rf.role = FOLLOWER
-	rf.applyCh = applyCh
-	rf.freshTimer()
 	rf.nextIndex = make([]int, rf.peerCnt)
 	rf.matchIndex = make([]int, rf.peerCnt)
-
-	// Your initialization code here (2A, 2B, 2C).
-
-	// initialize from state persisted before a crash
-	rf.logs = make([]LogEntry, 1)
-	rf.currentTerm = 0
-	rf.votedFor = -1
-	rf.offset = 0
-	rf.lastLogIndex = 0
+	rf.applyCond = sync.NewCond(&rf.mu)
+	rf.wakeLeaderCond = sync.NewCond(&rf.mu)
+	rf.initTimer()
 	rf.readPersist(persister.ReadRaftState())
-	rf.snapshot = persister.ReadSnapshot()
-	rf.commitIndex = rf.offset
-	rf.lastApplied = rf.offset
 	rf.logger.L(logger.Persist, "init from snap offset %d\n", rf.offset)
 	// start ticker goroutine to start elections
 	go rf.applier()
