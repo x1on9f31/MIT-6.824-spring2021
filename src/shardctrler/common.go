@@ -32,6 +32,7 @@ const (
 	OK             = "OK"
 	ErrNoKey       = "ErrNoKey"
 	ErrWrongLeader = "ErrWrongLeader"
+	ErrRPC         = "ErrRPCFailed"
 )
 
 type Err string

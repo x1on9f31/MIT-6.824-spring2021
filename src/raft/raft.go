@@ -604,8 +604,8 @@ func (rf *Raft) killed() bool {
 func (rf *Raft) ticker() {
 	for !rf.killed() {
 		if rf.checkTimeOut() {
-			go rf.newElection()
 			rf.freshTimer()
+			go rf.newElection()
 		}
 		rf.sleepTimeout()
 	}
