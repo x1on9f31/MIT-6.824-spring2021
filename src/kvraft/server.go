@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"6.824/labgob"
 	"6.824/labrpc"
@@ -99,18 +100,22 @@ func (kv *KVServer) doRequest(command *Command) interface{} {
 	wait_chan := kv.getWaitChan(index)
 	kv.mu.Unlock()
 
-	result := <-wait_chan //等待
+	timeout := time.NewTimer(time.Millisecond * 200)
+	select {
+	case <-wait_chan:
+	case <-timeout.C:
+	}
 
 	kv.mu.Lock()
 	if kv.hasResult(command.ClientID, command.Seq) {
-		kv.logger.L(logger.ServerReq, "[%3d--%d] successed !!!!! %#v\n",
-			command.ClientID%1000, command.Seq, result)
+		kv.logger.L(logger.ServerReq, "[%3d--%d] successed !!!!! \n",
+			command.ClientID%1000, command.Seq)
 		kv.mu.Unlock()
 		return kv.getReplyStruct(command, OK)
 	} else {
 
-		kv.logger.L(logger.ServerReq, "[%3d--%d] failed applied %#v\n",
-			command.ClientID%1000, command.Seq, result)
+		kv.logger.L(logger.ServerReq, "[%3d--%d] failed applied \n",
+			command.ClientID%1000, command.Seq)
 		kv.mu.Unlock()
 		return kv.getReplyStruct(command, ErrNoKey)
 	}
@@ -141,10 +146,16 @@ func (kv *KVServer) killed() bool {
 
 //hold lock, get a channel to read result
 func (kv *KVServer) getWaitChan(index int) chan bool {
-	if kv.reply_chan[index] == nil {
-		kv.reply_chan[index] = make(chan bool, 1)
+	if _, ok := kv.reply_chan[index]; !ok {
+		kv.reply_chan[index] = make(chan bool)
 	}
 	return kv.reply_chan[index]
+}
+func (kv *KVServer) notify(index int) {
+	if c, ok := kv.reply_chan[index]; ok {
+		close(c)
+		delete(kv.reply_chan, index)
+	}
 }
 
 //recv ApplyMsg from applyCh
@@ -160,9 +171,7 @@ func (kv *KVServer) applier() {
 				kv.logger.L(logger.ServerSnap, "decide Installsnapshot %v <- %v\n", m.SnapshotIndex, kv.lastApplied)
 				kv.applyInstallSnapshot(m.Snapshot)
 				for i := old_apply + 1; i <= m.SnapshotIndex; i++ {
-					if kv.reply_chan[m.CommandIndex] != nil {
-						kv.reply_chan[m.CommandIndex] <- true
-					}
+					kv.notify(i)
 				}
 			}
 		} else if m.CommandValid && m.CommandIndex == 1+kv.lastApplied {
@@ -179,10 +188,7 @@ func (kv *KVServer) applier() {
 			if kv.needSnapshot() {
 				kv.doSnapshotForRaft(m.CommandIndex)
 			}
-			if kv.reply_chan[m.CommandIndex] != nil {
-				kv.reply_chan[m.CommandIndex] <- true
-
-			}
+			kv.notify(m.CommandIndex)
 
 		} else if m.CommandValid && m.CommandIndex != 1+kv.lastApplied {
 			// out of order cmd, just ignore

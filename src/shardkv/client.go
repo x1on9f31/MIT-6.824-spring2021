@@ -8,11 +8,35 @@ package shardkv
 // talks to the group that holds the key's shard.
 //
 
-import "6.824/labrpc"
-import "crypto/rand"
-import "math/big"
-import "6.824/shardctrler"
-import "time"
+import (
+	"crypto/rand"
+	"math/big"
+	"sync"
+	"time"
+
+	"6.824/labrpc"
+	logger "6.824/raft-logs"
+	"6.824/shardctrler"
+)
+
+var used_ID map[int64]bool
+var map_lock sync.Mutex
+
+func init() {
+	used_ID = make(map[int64]bool)
+	used_ID[-1] = true
+}
+func getUnusedClientID() int64 {
+	map_lock.Lock()
+	defer map_lock.Unlock()
+	for {
+		id := nrand()
+		if !used_ID[id] {
+			used_ID[id] = true
+			return id
+		}
+	}
+}
 
 //
 // which shard is a key in?
@@ -39,6 +63,9 @@ type Clerk struct {
 	sm       *shardctrler.Clerk
 	config   shardctrler.Config
 	make_end func(string) *labrpc.ClientEnd
+	id       int64
+	logger   logger.TopicLogger
+	seq      int
 	// You will have to modify this struct.
 }
 
@@ -55,6 +82,11 @@ func MakeClerk(ctrlers []*labrpc.ClientEnd, make_end func(string) *labrpc.Client
 	ck := new(Clerk)
 	ck.sm = shardctrler.MakeClerk(ctrlers)
 	ck.make_end = make_end
+	ck.seq = 0
+	ck.id = getUnusedClientID()
+	ck.logger = logger.TopicLogger{Me: int(ck.id) % 1000}
+	ck.config = ck.sm.Query(-1)
+
 	// You'll have to add code here.
 	return ck
 }
@@ -104,7 +136,6 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 	args.Key = key
 	args.Value = value
 	args.Op = op
-
 
 	for {
 		shard := key2shard(key)

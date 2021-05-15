@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"math/big"
 	"sync"
-	"time"
 
 	"6.824/labrpc"
 	logger "6.824/raft-logs"
@@ -33,12 +32,9 @@ func getUnusedClientID() int64 {
 type Clerk struct {
 	servers []*labrpc.ClientEnd
 	// You will have to modify this struct.
-	id        int64
-	serverCnt int
-	logger    logger.TopicLogger
-
-	seq        int
-	lastLeader int
+	id     int64
+	logger logger.TopicLogger
+	seq    int
 }
 
 func nrand() int64 {
@@ -51,7 +47,6 @@ func nrand() int64 {
 func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
-	ck.serverCnt = len(servers)
 	ck.id = getUnusedClientID()
 	ck.seq = 0
 	ck.logger = logger.TopicLogger{Me: int(ck.id) % 1000}
@@ -73,45 +68,26 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 // arguments. and reply must be passed as a pointer.
 //
 func (ck *Clerk) Get(key string) string {
-
+	args := GetArgs{
+		Key:      key,
+		ClientID: ck.id,
+		Seq:      ck.seq,
+	}
 	// You will have to modify this function.
 
 	for {
-		args := GetArgs{
-			Key:      key,
-			ClientID: ck.id,
-		}
-		timer := time.NewTimer(time.Millisecond * 100)
-		done := make(chan *GetReply)
-		args.Seq = ck.seq
+		for _, srv := range ck.servers {
 
-		peer := ck.lastLeader
-		go func(d chan *GetReply) {
-			reply := GetReply{
-				Err:   "",
-				Value: "",
-			}
-			ok := ck.servers[peer].Call("KVServer.Get", &args, &reply)
-			if !ok {
-				reply.Err = "!ok rpc"
-			}
-			d <- &reply
-		}(done)
+			reply := GetReply{}
+			ok := srv.Call("KVServer.Get", &args, &reply)
 
-		select {
-		case <-timer.C:
-		case reply := <-done:
-			if reply.Err == OK {
+			if ok && reply.Err == OK {
 				ck.logger.L(logger.Clerk, "[%d] clerk get okkkkk : %v\n", args.Seq, reply.Value)
-
 				ck.seq++
-
 				return reply.Value
 			}
+
 		}
-
-		ck.lastLeader = (ck.lastLeader + 1) % ck.serverCnt
-
 	}
 
 }
@@ -128,48 +104,26 @@ func (ck *Clerk) Get(key string) string {
 //
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	// You will have to modify this function.
-
+	args := PutAppendArgs{
+		Key:      key,
+		Value:    value,
+		Op:       op,
+		ClientID: ck.id,
+		Seq:      ck.seq,
+	}
 	for {
-		args := PutAppendArgs{
-			Key:      key,
-			Value:    value,
-			Op:       op,
-			ClientID: ck.id,
-		}
-		timer := time.NewTimer(time.Millisecond * 100)
-		done := make(chan *PutAppendReply)
+		for _, srv := range ck.servers {
 
-		args.Seq = ck.seq
+			reply := PutAppendReply{}
+			ok := srv.Call("KVServer.PutAppend", &args, &reply)
 
-		peer := ck.lastLeader
-		go func(d chan *PutAppendReply) {
-			reply := PutAppendReply{
-				Err: "",
-			}
-			ok := ck.servers[peer].Call("KVServer.PutAppend", &args, &reply)
-			if !ok {
-				reply.Err = "!ok rpc"
-			}
-			done <- &reply
-		}(done)
-
-		select {
-		case <-timer.C:
-		case reply := <-done:
-			if reply.Err == OK {
+			if ok && reply.Err == OK {
 				ck.logger.L(logger.Clerk, "[%d] clerk putAppend okkkkk\n", args.Seq)
-
 				ck.seq++
-
 				return
 			}
-			// else {
-			// 	fmt.Printf("[%3d--%d] clerk putAppend not ok err: %v\n", ck.id%1000, ck.cmd_seq, reply.Err)
-			// }
+
 		}
-
-		ck.lastLeader = (ck.lastLeader + 1) % ck.serverCnt
-
 	}
 
 }

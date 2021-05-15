@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"6.824/labgob"
 	"6.824/labrpc"
@@ -98,7 +99,11 @@ func (sc *ShardCtrler) doRequest(command *Command) interface{} {
 	wait_chan := sc.getWaitChan(index)
 	sc.mu.Unlock()
 
-	result := <-wait_chan //等待
+	timeout := time.NewTimer(time.Millisecond * 200)
+	select {
+	case <-wait_chan:
+	case <-timeout.C:
+	}
 
 	sc.mu.Lock()
 	if ok, res := sc.hasResult(command); ok {
@@ -106,8 +111,8 @@ func (sc *ShardCtrler) doRequest(command *Command) interface{} {
 		return res
 
 	} else {
-		sc.logger.L(logger.CtrlerReq, "[%3d--%d] failed applied %#v\n",
-			command.ClientID%1000, command.Seq, result)
+		sc.logger.L(logger.CtrlerReq, "[%3d--%d] failed applied \n",
+			command.ClientID%1000, command.Seq)
 		sc.mu.Unlock()
 		return sc.getReplyStruct(command.OptType, true)
 	}
@@ -156,10 +161,16 @@ func (sc *ShardCtrler) hasResult(req *Command) (bool, interface{}) {
 
 //hold lock, get a channel to read result
 func (sc *ShardCtrler) getWaitChan(index int) chan bool {
-	if sc.reply_chan[index] == nil {
-		sc.reply_chan[index] = make(chan bool, 1)
+	if _, ok := sc.reply_chan[index]; !ok {
+		sc.reply_chan[index] = make(chan bool)
 	}
 	return sc.reply_chan[index]
+}
+func (sc *ShardCtrler) notify(index int) {
+	if c, ok := sc.reply_chan[index]; ok {
+		close(c)
+		delete(sc.reply_chan, index)
+	}
 }
 
 //recv ApplyMsg from applyCh
@@ -175,9 +186,7 @@ func (sc *ShardCtrler) applier() {
 				sc.logger.L(logger.CtrlerSnap, "decide Installsnapshot %v <- %v\n", m.SnapshotIndex, sc.lastApplied)
 				sc.applyInstallSnapshot(m.Snapshot)
 				for i := old_apply + 1; i <= m.SnapshotIndex; i++ {
-					if sc.reply_chan[m.CommandIndex] != nil {
-						sc.reply_chan[m.CommandIndex] <- true
-					}
+					sc.notify(i)
 				}
 			}
 		} else if m.CommandValid && m.CommandIndex == 1+sc.lastApplied {
@@ -196,9 +205,7 @@ func (sc *ShardCtrler) applier() {
 			if sc.needSnapshot() {
 				sc.doSnapshotForRaft(m.CommandIndex)
 			}
-			if sc.reply_chan[m.CommandIndex] != nil {
-				sc.reply_chan[m.CommandIndex] <- true
-			}
+			sc.notify(m.CommandIndex)
 
 		} else if m.CommandValid && m.CommandIndex != 1+sc.lastApplied {
 			// out of order cmd, just ignore
