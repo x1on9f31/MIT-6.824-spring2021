@@ -1,15 +1,20 @@
 package shardkv
 
-import "6.824/porcupine"
-import "6.824/models"
-import "testing"
-import "strconv"
-import "time"
-import "fmt"
-import "sync/atomic"
-import "sync"
-import "math/rand"
-import "io/ioutil"
+import (
+	"bytes"
+	"fmt"
+	"io/ioutil"
+	"math/rand"
+	"strconv"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"6.824/labgob"
+	"6.824/models"
+	"6.824/porcupine"
+)
 
 const linearizabilityCheckTimeout = 1 * time.Second
 
@@ -101,7 +106,7 @@ func TestJoinLeave(t *testing.T) {
 	defer cfg.cleanup()
 
 	ck := cfg.makeClient()
-
+	fmt.Println("----------------------------------------------")
 	cfg.join(0)
 
 	n := 10
@@ -115,7 +120,7 @@ func TestJoinLeave(t *testing.T) {
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
 	}
-
+	fmt.Println("----------------------------------------------")
 	cfg.join(1)
 
 	for i := 0; i < n; i++ {
@@ -124,7 +129,7 @@ func TestJoinLeave(t *testing.T) {
 		ck.Append(ka[i], x)
 		va[i] += x
 	}
-
+	fmt.Println("----------------------------------------------")
 	cfg.leave(0)
 
 	for i := 0; i < n; i++ {
@@ -731,6 +736,34 @@ func TestUnreliable3(t *testing.T) {
 	fmt.Printf("  ... Passed\n")
 }
 
+func printSnap(snap []byte) string {
+	r := bytes.NewBuffer(snap)
+	d := labgob.NewDecoder(r)
+
+	lastIndex := 0
+	var pendingShards [NShards]bool
+	var config Config
+	var states []ShardState
+
+	if d.Decode(&lastIndex) != nil ||
+		d.Decode(&pendingShards) != nil ||
+		d.Decode(&config) != nil ||
+		d.Decode(&states) != nil {
+		panic("err decode snap")
+	} else {
+		res := "["
+		for i := 0; i < NShards; i++ {
+			res += strconv.Itoa(i) + " :{"
+			for k, _ := range states[i].KVmap {
+				res += k + ","
+			}
+			res += "}"
+		}
+		res += "]"
+		return res
+	}
+}
+
 //
 // optional test to see whether servers are deleting
 // shards for which they are no longer responsible.
@@ -759,6 +792,7 @@ func TestChallenge1Delete(t *testing.T) {
 		check(t, ck, ka[i], va[i])
 	}
 
+	fmt.Printf("================\n\n\n\n\n")
 	for iters := 0; iters < 2; iters++ {
 		cfg.join(1)
 		cfg.leave(0)
@@ -779,6 +813,7 @@ func TestChallenge1Delete(t *testing.T) {
 	cfg.join(1)
 	cfg.join(2)
 	time.Sleep(1 * time.Second)
+	fmt.Println("------------------------------")
 	for i := 0; i < 3; i++ {
 		check(t, ck, ka[i], va[i])
 	}
@@ -790,13 +825,20 @@ func TestChallenge1Delete(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		check(t, ck, ka[i], va[i])
 	}
-
+	fmt.Println("------------------------------")
 	total := 0
+	snap_size := 0
+	raft_size := 0
 	for gi := 0; gi < cfg.ngroups; gi++ {
 		for i := 0; i < cfg.n; i++ {
 			raft := cfg.groups[gi].saved[i].RaftStateSize()
 			snap := len(cfg.groups[gi].saved[i].ReadSnapshot())
 			total += raft + snap
+			snap_size += snap
+			raft_size += raft
+			fmt.Printf("group %d server %d snap:%s\n", gi, i,
+				printSnap(cfg.groups[gi].saved[i].ReadSnapshot()))
+
 		}
 	}
 
@@ -804,6 +846,7 @@ func TestChallenge1Delete(t *testing.T) {
 	// 3 keys should also be stored in client dup tables.
 	// everything on 3 replicas.
 	// plus slop.
+	fmt.Printf("snap size:%d, raft size%d\n", snap_size, raft_size)
 	expected := 3 * (((n - 3) * 1000) + 2*3*1000 + 6000)
 	if total > expected {
 		t.Fatalf("snapshot + persisted Raft state are too big: %v > %v\n", total, expected)

@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"math/big"
 	"sync"
+	"time"
 
 	"6.824/labrpc"
 	logger "6.824/raft-logs"
@@ -88,6 +89,7 @@ func (ck *Clerk) Get(key string) string {
 			}
 
 		}
+		time.Sleep(time.Millisecond * 100)
 	}
 
 }
@@ -124,6 +126,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 			}
 
 		}
+		time.Sleep(time.Millisecond * 100)
 	}
 
 }

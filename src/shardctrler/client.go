@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"math/big"
 	"sync"
+	"time"
 
 	"6.824/labrpc"
 )
@@ -73,6 +74,7 @@ func (ck *Clerk) Query(num int) Config {
 			}
 
 		}
+		time.Sleep(time.Millisecond * 100)
 	}
 }
 
@@ -86,9 +88,7 @@ func (ck *Clerk) Join(servers map[int][]string) {
 	}
 
 	for {
-
 		// try each known server.
-
 		for _, srv := range ck.servers {
 
 			var reply JoinReply
@@ -103,6 +103,7 @@ func (ck *Clerk) Join(servers map[int][]string) {
 			}
 
 		}
+		time.Sleep(time.Millisecond * 100)
 	}
 }
 
@@ -128,6 +129,7 @@ func (ck *Clerk) Leave(gids []int) {
 			}
 
 		}
+		time.Sleep(time.Millisecond * 100)
 	}
 }
 
@@ -156,5 +158,6 @@ func (ck *Clerk) Move(shard int, gid int) {
 			}
 
 		}
+		time.Sleep(time.Millisecond * 100)
 	}
 }

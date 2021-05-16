@@ -179,18 +179,18 @@ func (sc *ShardCtrler) applier() {
 		m := <-sc.applyCh
 		sc.mu.Lock()
 		if m.SnapshotValid { //snapshot
-			sc.logger.L(logger.CtrlerSnap, "recv Installsnapshot %v %v\n", m.SnapshotIndex, sc.lastApplied)
+			sc.logger.L(logger.CtrlerSnap, "ctrler recv Installsnapshot %v %v\n", m.SnapshotIndex, sc.lastApplied)
 			if sc.rf.CondInstallSnapshot(m.SnapshotTerm,
 				m.SnapshotIndex, m.Snapshot) {
 				old_apply := sc.lastApplied
-				sc.logger.L(logger.CtrlerSnap, "decide Installsnapshot %v <- %v\n", m.SnapshotIndex, sc.lastApplied)
+				sc.logger.L(logger.CtrlerSnap, "ctrler decide Installsnapshot %v <- %v\n", m.SnapshotIndex, sc.lastApplied)
 				sc.applyInstallSnapshot(m.Snapshot)
 				for i := old_apply + 1; i <= m.SnapshotIndex; i++ {
 					sc.notify(i)
 				}
 			}
 		} else if m.CommandValid && m.CommandIndex == 1+sc.lastApplied {
-			sc.logger.L(logger.CtrlerApply, "apply %d %#v lastApplied %v\n", m.CommandIndex, m.Command, sc.lastApplied)
+			//sc.logger.L(logger.CtrlerApply, "apply %d %#v lastApplied %v\n", m.CommandIndex, m.Command, sc.lastApplied)
 
 			sc.lastApplied = m.CommandIndex
 
@@ -201,7 +201,7 @@ func (sc *ShardCtrler) applier() {
 			}
 			sc.applyCommand(v) //may ignore duplicate cmd
 
-			sc.logger.L(logger.CtrlerApply, "lastConfigNum %d last configs :%v\n", len(sc.configs)-1, sc.configs[len(sc.configs)-1])
+			//sc.logger.L(logger.CtrlerApply, "lastConfigNum %d last configs :%v\n", len(sc.configs)-1, sc.configs[len(sc.configs)-1])
 			if sc.needSnapshot() {
 				sc.doSnapshotForRaft(m.CommandIndex)
 			}
@@ -209,11 +209,11 @@ func (sc *ShardCtrler) applier() {
 
 		} else if m.CommandValid && m.CommandIndex != 1+sc.lastApplied {
 			// out of order cmd, just ignore
-			sc.logger.L(logger.CtrlerApply, "ignore apply %v for lastApplied %v\n",
+			sc.logger.L(logger.CtrlerApply, "ctrler ignore apply %v for lastApplied %v\n",
 				m.CommandIndex, sc.lastApplied)
 		} else {
 			// wrong command
-			sc.logger.L(logger.CtrlerApply, "Invalid apply msg\n")
+			sc.logger.L(logger.CtrlerApply, "ctrler Invalid apply msg\n")
 		}
 
 		sc.mu.Unlock()
@@ -226,7 +226,7 @@ func (sc *ShardCtrler) applyCommand(v Command) {
 		return
 	}
 	if sc.next_seq[v.ClientID] != v.Seq {
-		panic("cmd seq gap!!!")
+		panic("ctrler cmd seq gap!!!")
 	}
 
 	sc.next_seq[v.ClientID]++
@@ -242,6 +242,7 @@ func (sc *ShardCtrler) applyCommand(v Command) {
 			new_config = sc.doMove(v.Opt.(GIDandShard))
 		}
 		sc.configs = append(sc.configs, *new_config)
+		sc.logger.L(logger.CtrlerApply, "ctrler change to config %v\n", new_config)
 	}
 
 }
@@ -249,7 +250,7 @@ func (sc *ShardCtrler) applyCommand(v Command) {
 //hold lock
 func (sc *ShardCtrler) applyInstallSnapshot(snap []byte) {
 	if snap == nil || len(snap) < 1 { // bootstrap without any state?
-		sc.logger.L(logger.CtrlerSnap, "empty snap\n")
+		sc.logger.L(logger.CtrlerSnap, "ctrler empty snap\n")
 		return
 	}
 
@@ -261,8 +262,8 @@ func (sc *ShardCtrler) applyInstallSnapshot(snap []byte) {
 	if d.Decode(&lastIndex) != nil ||
 		d.Decode(&client_to_nextseq_map) != nil ||
 		d.Decode(&configs) != nil {
-		sc.logger.L(logger.CtrlerSnap, "apply install decode err\n")
-		panic("err decode snap")
+		sc.logger.L(logger.CtrlerSnap, "ctrler apply install decode err\n")
+		panic("ctrler err decode snap")
 	} else {
 		sc.lastApplied = lastIndex
 		sc.next_seq = client_to_nextseq_map
@@ -293,7 +294,7 @@ func (sc *ShardCtrler) needSnapshot() bool {
 	}
 	size := sc.persister.RaftStateSize()
 	if size >= sc.maxraftstate {
-		sc.logger.L(logger.CtrlerSnapSize, "used size: %d / %d \n", size, sc.maxraftstate)
+		sc.logger.L(logger.CtrlerSnapSize, "ctrler used size: %d / %d \n", size, sc.maxraftstate)
 		return true
 	}
 	return false
@@ -306,6 +307,7 @@ func (sc *ShardCtrler) Raft() *raft.Raft {
 
 //
 // servers[] contains the ports of the set of
+
 // servers that will cooperate via Raft to
 // form the fault-tolerant shardctrler service.
 // me is the index of the current server in servers[].
