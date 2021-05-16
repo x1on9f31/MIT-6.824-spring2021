@@ -836,6 +836,9 @@ func TestChallenge1Delete(t *testing.T) {
 			total += raft + snap
 			snap_size += snap
 			raft_size += raft
+			fmt.Printf("group %d server %d snap size:%d raft size:%d\n", gi, i,
+				snap, raft)
+
 			fmt.Printf("group %d server %d snap:%s\n", gi, i,
 				printSnap(cfg.groups[gi].saved[i].ReadSnapshot()))
 

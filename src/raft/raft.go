@@ -107,17 +107,21 @@ func (rf *Raft) doPersistRaftAndSnap(index, term int, snapshot []byte) {
 		length_after_trim = 1
 		rf.logs = make([]LogEntry, 1)
 	} else {
-		newLogs := make([]LogEntry, length_after_trim)
-		copy(newLogs, rf.logs[index-rf.offset:]) //log[0].Term saves lastIncludedTerm
-		rf.logs = newLogs
+		// newLogs := make([]LogEntry, length_after_trim)
+		// copy(newLogs, rf.logs[index-rf.offset:]) //log[0].Term saves lastIncludedTerm
+		rf.logs = append([]LogEntry{}, rf.logs[index-rf.offset:]...)
 	}
 	if index > rf.lastLogIndex {
 		rf.lastLogIndex = index
 	}
 	rf.logs[0].Term = term
+	rf.logs[0].Command = nil
 	rf.offset = index
-	rf.persister.SaveStateAndSnapshot(rf.getRaftState(), snapshot)
+	state := rf.getRaftState()
+	rf.persister.SaveStateAndSnapshot(state, snapshot)
 	rf.snapshot = snapshot
+	rf.logger.L(logger.SnapSize, "raft apply snapshot offset %d ,total log %d, size %d,log cap:%d\n",
+		index, rf.lastLogIndex, len(state), cap(rf.logs))
 }
 
 //hold lock
