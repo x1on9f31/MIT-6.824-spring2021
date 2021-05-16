@@ -116,6 +116,7 @@ func (ck *Clerk) Get(key string) string {
 				ok := srv.Call("ShardKV.Get", &args, &reply)
 				if ok && (reply.Err == OK || reply.Err == ErrNoKey) {
 					ck.seq++
+					ck.logger.L(logger.Clerk, "[%d] clerk get okkkkk\n", args.Seq)
 					return reply.Value
 				}
 				if ok && (reply.Err == ErrWrongGroup) {
@@ -156,6 +157,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 				ok := srv.Call("ShardKV.PutAppend", &args, &reply)
 				if ok && reply.Err == OK {
 					ck.seq++
+					ck.logger.L(logger.Clerk, "[%d] clerk putAppend okkkkk\n", args.Seq)
 					return
 				}
 				if ok && reply.Err == ErrWrongGroup {

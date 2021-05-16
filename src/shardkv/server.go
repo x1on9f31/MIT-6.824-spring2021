@@ -94,8 +94,8 @@ func (kv *ShardKV) hasResult(clientID int64, seq, shard int) bool {
 func (kv *ShardKV) checkResult(command *Command) (bool, bool, interface{}) {
 
 	shard := key2shard(command.Key)
-	kv.logger.L(logger.ServerReq, "check result responsiable %v,shard %d num %d ,config %v\n",
-		kv.isResponsible(shard, command.Num), shard, command.Num, kv.config)
+	// kv.logger.L(logger.ServerReq, "check result responsiable %v,shard %d num %d ,config %v\n",
+	// 	kv.isResponsible(shard, command.Num), shard, command.Num, kv.config)
 
 	if !kv.isResponsible(shard, command.Num) {
 		return false, false, kv.getReplyStruct(command.OptType, ErrWrongGroup)
