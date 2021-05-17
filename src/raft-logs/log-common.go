@@ -20,13 +20,13 @@ const (
 	PERSIST_IGNORE = false //persist log
 
 	//raft
-	Client LogTopic = iota
+	Start LogTopic = iota
 	Commit
 	Drop
 	Error
 	Info
 	Leader
-	Log1
+	LogModify
 	Persist
 	Snap
 	Term
@@ -43,7 +43,7 @@ const (
 	SnapSize
 
 	//kv server
-	ServerReq
+	ServerReq = 100
 	ServerSnap
 	ServerApply
 	ServerSnapSize
@@ -59,26 +59,27 @@ const (
 	Cfg
 
 	//ctrler
-	CtrlerStart
-	Query
-	Join
-	Leave
-	Move
-	Balance
+	CtrlerStart = 200
+	CtrlerQuery
+	CtrlerJoin
+	CtrlerLeave
+	CtrlerMove
+	CtrlerBalance
 	CtrlerApply
 	CtrlerSnap
 	CtrlerReq
 	CtrlerSnapSize
 
 	//shardkv
-	SKVReq = 100
-	SKVStart
-	SKVApply
-	SKVConfig
-	SKVMove
-	SKVSnap
-	SKVSnapSize
-	SKVShutDown
+	ShardKVReq = 500
+	ShardKVStart
+	ShardKVApply
+	ShardKVConfig
+	ShardKVMigration
+	ShardKVSnap
+	ShardKVSnapSize
+	ShardKVShutDown
+
 	Debug_Level = 2
 )
 
@@ -105,34 +106,13 @@ func init() {
 	log.SetFlags(log.Flags() &^ (log.Ldate | log.Ltime))
 	Print_Map = make(map[LogTopic]bool)
 	print_list := []LogTopic{
-		Clerk,
-		ServerApply,
-		ServerReq,
-		// Leader,
-		SnapSize,
-		ServerSnapSize,
-		ServerStart,
-		//ServerSnapSize,
-		ServerShutdown,
-		ServerConfig,
-		ServerMove,
-		ServerSnap,
-		// ServerShutdown,
-		// Cfg,
-		// ServerApply,
-		//CtrlerStart,
+		//Clerk,
+		ShardKVApply,
+		ShardKVConfig,
+		ShardKVMigration,
+		ShardKVReq,
+		ShardKVStart,
 		CtrlerApply,
-		//Role,
-		//Term,
-		//Timer,
-		//Leader,
-		//Log1,
-		//Client,
-		// Query,
-		// Join,
-		// Leave,
-		// Move,
-		// Balance,
 	}
 
 	for _, v := range print_list {

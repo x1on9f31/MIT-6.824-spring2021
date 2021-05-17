@@ -42,7 +42,7 @@ func (sc *ShardCtrler) getBalancedShards(cnt_map map[int]int, newShards [NShards
 		}
 	}
 
-	sc.logger.L(logger.Balance, "sorted map:%v\n", index_arr)
+	sc.logger.L(logger.CtrlerBalance, "sorted map:%v\n", index_arr)
 
 	//let some groups release shards util reach their optimized assignment
 	for i := groupCnt - 1; i >= 0; i-- {
@@ -80,14 +80,14 @@ func (sc *ShardCtrler) getBalancedShards(cnt_map map[int]int, newShards [NShards
 
 	}
 
-	sc.logger.L(logger.Balance, "preAssign %d after balance %v\n", optimized_assign, newShards)
+	sc.logger.L(logger.CtrlerBalance, "preAssign %d after balance %v\n", optimized_assign, newShards)
 	return newShards
 }
 
 func (sc *ShardCtrler) doJoin(servers map[int][]string) *Config {
 
 	old := &sc.configs[len(sc.configs)-1]
-	sc.logger.L(logger.Join, "join %v old %v\n", servers, old)
+	sc.logger.L(logger.CtrlerJoin, "join %v old %v\n", servers, old)
 
 	new_group_map := joinServers(servers, old.Groups)
 
@@ -102,7 +102,7 @@ func (sc *ShardCtrler) doJoin(servers map[int][]string) *Config {
 
 	}
 
-	sc.logger.L(logger.Join, "cnt_map :%v\n", cnt_map)
+	sc.logger.L(logger.CtrlerJoin, "cnt_map :%v\n", cnt_map)
 	return &Config{
 		Num:    len(sc.configs),
 		Shards: sc.getBalancedShards(cnt_map, old.Shards),
@@ -112,7 +112,7 @@ func (sc *ShardCtrler) doJoin(servers map[int][]string) *Config {
 func (sc *ShardCtrler) doLeave(gids []int) *Config {
 
 	old := &sc.configs[len(sc.configs)-1]
-	sc.logger.L(logger.Leave, "leave %v old %v\n", gids, old)
+	sc.logger.L(logger.CtrlerLeave, "leave %v old %v\n", gids, old)
 	leave_gids := make(map[int]bool)
 	for _, v := range gids {
 		leave_gids[v] = true
@@ -149,7 +149,7 @@ func (sc *ShardCtrler) doMove(args GIDandShard) *Config {
 	old := &sc.configs[len(sc.configs)-1]
 	new_shards := old.Shards
 	new_shards[args.Shard] = args.GID
-	sc.logger.L(logger.Move, "move shards %v\n", args)
+	sc.logger.L(logger.CtrlerMove, "move shards %v\n", args)
 	return &Config{
 		Num:    len(sc.configs),
 		Shards: new_shards,
@@ -160,7 +160,7 @@ func (sc *ShardCtrler) doMove(args GIDandShard) *Config {
 func (sc *ShardCtrler) queryConfig(num int) *Config {
 	if num < 0 {
 		length := len(sc.configs)
-		sc.logger.L(logger.Query, "query %d current %#v\n", num, sc.configs[len(sc.configs)-1])
+		sc.logger.L(logger.CtrlerQuery, "query %d current %#v\n", num, sc.configs[len(sc.configs)-1])
 		return &sc.configs[length-1]
 	}
 	if num == -1 || num >= len(sc.configs)-1 {

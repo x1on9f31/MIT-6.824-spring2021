@@ -49,22 +49,20 @@ type GetReply struct {
 	Value string
 }
 
-type SendShardsArgs struct {
-	Shards []ShardIndexed
-	Num    int
+type MigrationArgs struct {
+	ShardsIndexes []int
+	ShardDatas    []ShardData
+	Num           int
 }
-type SendShardsReply struct {
+
+type MigrationReply struct {
 	Ok  bool
 	Num int
 }
 
-type ShardState struct {
+type ShardData struct {
 	KVmap   map[string]string
 	NextSeq map[int64]int
 }
 
-type ShardIndexed struct {
-	ShardIndex int
-	State      ShardState
-}
-type MigrateCommand = SendShardsArgs
+type MigrateCommand = MigrationArgs

@@ -745,7 +745,7 @@ func printSnap(snap []byte) string {
 	lastIndex := 0
 	var pendingShards [NShards]bool
 	var config Config
-	var states []ShardState
+	var states []ShardData
 
 	if d.Decode(&lastIndex) != nil ||
 		d.Decode(&pendingShards) != nil ||

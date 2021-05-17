@@ -28,14 +28,11 @@ cd src/shardctrler
 cd src/shardkv  
 
 ## Correctness
-passed over 10k rounds of test in lab2    
-passed over 1k rounds of test in lab3   
-passed over 10k rounds of test in lab4a   
-passed over 50  rounds of test in lab4b
+Lab 2  : 10k rounds    
+Lab 3  : 1k rounds 
+Lab 4a : 10k rounds
+Lab 4b : 100 rounds (takes much more time and cpu resouces than other tests)  
 
-All above test without -race flag, may still have data contention.  
-But I tried run 4B with -race once and passed, so it should be right, I guess so but not promise  
-Good luck to you!  
 
 
 ## Enable Logger

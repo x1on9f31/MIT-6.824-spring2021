@@ -57,7 +57,7 @@ type ShardKV struct {
 	reply_chan map[int]chan bool
 
 	//snapshot
-	states        []ShardState
+	states        []ShardData
 	lastApplied   int
 	pendingShards [NShards]bool
 	config        Config
@@ -95,8 +95,6 @@ func (kv *ShardKV) hasResult(clientID int64, seq, shard int) bool {
 func (kv *ShardKV) checkResult(command *Command) (bool, bool, interface{}) {
 
 	shard := key2shard(command.Key)
-	// kv.logger.L(logger.ServerReq, "check result responsiable %v,shard %d num %d ,config %v\n",
-	// 	kv.isResponsible(shard, command.Num), shard, command.Num, kv.config)
 
 	if !kv.isResponsible(shard, command.Num) {
 		return false, false, kv.getReplyStruct(command.OptType, ErrWrongGroup)
@@ -106,7 +104,7 @@ func (kv *ShardKV) checkResult(command *Command) (bool, bool, interface{}) {
 	}
 	//applied
 	if kv.hasResult(command.ClientID, command.Seq, shard) {
-		kv.logger.L(logger.ServerReq, "[%3d--%d] successed\n",
+		kv.logger.L(logger.ShardKVReq, "[%3d--%d] successed\n",
 			command.ClientID%1000, command.Seq)
 
 		res := kv.getReplyStruct(command.OptType, OK)
@@ -120,6 +118,7 @@ func (kv *ShardKV) checkResult(command *Command) (bool, bool, interface{}) {
 		return true, false, kv.getReplyStruct(command.OptType, ErrWrongLeader)
 	}
 }
+
 func printCommand(command *Command) string {
 	return fmt.Sprintf("Key %v type %d num %d Client %d Seq %d",
 		command.Key, command.OptType, command.Num,
@@ -130,7 +129,7 @@ func printCommand(command *Command) string {
 func (kv *ShardKV) doRequest(command *Command) interface{} {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
-	kv.logger.L(logger.ServerReq, "do request args:%s \n", printCommand(command))
+	kv.logger.L(logger.ShardKVReq, "do request args:%s \n", printCommand(command))
 
 	if avaliable, ok, res := kv.checkResult(command); !avaliable || ok {
 		return res
@@ -139,11 +138,11 @@ func (kv *ShardKV) doRequest(command *Command) interface{} {
 	index, _, isLeader := kv.rf.Start(*command)
 
 	if !isLeader {
-		kv.logger.L(logger.ServerReq, "declined [%3d--%d] for not leader\n",
+		kv.logger.L(logger.ShardKVReq, "declined [%3d--%d] for not leader\n",
 			command.ClientID%1000, command.Seq)
 		return kv.getReplyStruct(command.OptType, ErrWrongLeader)
 	} else {
-		kv.logger.L(logger.ServerStart, "start [%3d--%d] as leader?\n",
+		kv.logger.L(logger.ShardKVStart, "start [%3d--%d] as leader?\n",
 			command.ClientID%1000, command.Seq)
 	}
 
@@ -160,10 +159,10 @@ func (kv *ShardKV) doRequest(command *Command) interface{} {
 
 	avaliable, ok, res := kv.checkResult(command)
 	if ok {
-		kv.logger.L(logger.ServerReq, "[%3d--%d] ok \n",
+		kv.logger.L(logger.ShardKVReq, "[%3d--%d] ok \n",
 			command.ClientID%1000, command.Seq)
 	} else {
-		kv.logger.L(logger.ServerReq, "[%3d--%d] failed applied ava %v\n",
+		kv.logger.L(logger.ShardKVReq, "[%3d--%d] failed applied ava %v\n",
 			command.ClientID%1000, command.Seq, avaliable)
 	}
 
@@ -178,7 +177,7 @@ func (kv *ShardKV) doRequest(command *Command) interface{} {
 // turn off debug output from this instance.
 //
 func (kv *ShardKV) Kill() {
-	kv.logger.L(logger.ServerShutdown, "server killed######\n")
+	kv.logger.L(logger.ShardKVShutDown, "ShardKV killed######\n")
 	atomic.StoreInt32(&kv.dead, 1)
 	kv.rf.Kill()
 	// Your code here, if desired.
@@ -189,15 +188,15 @@ func (kv *ShardKV) killed() bool {
 }
 
 //
-// servers[] contains the ports of the servers in this group.
+// ShardKVs[] contains the ports of the ShardKVs in this group.
 //
-// me is the index of the current server in servers[].
+// me is the index of the current ShardKV in ShardKVs[].
 //
-// the k/v server should store snapshots through the underlying Raft
+// the k/v ShardKV should store snapshots through the underlying Raft
 // implementation, which should call persister.SaveStateAndSnapshot() to
 // atomically save the Raft state along with the snapshot.
 //
-// the k/v server should snapshot when Raft's saved state exceeds
+// the k/v ShardKV should snapshot when Raft's saved state exceeds
 // maxraftstate bytes, in order to allow Raft to garbage-collect its
 // log. if maxraftstate is -1, you don't need to snapshot.
 //
@@ -206,14 +205,14 @@ func (kv *ShardKV) killed() bool {
 // pass ctrlers[] to shardctrler.MakeClerk() so you can send
 // RPCs to the shardctrler.
 //
-// make_end(servername) turns a server name from a
+// make_end(ShardKVname) turns a ShardKV name from a
 // Config.Groups[gid][i] into a labrpc.ClientEnd on which you can
 // send RPCs. You'll need this to send RPCs to other groups.
 //
 // look at client.go for examples of how to use ctrlers[]
 // and make_end() to send RPCs to the group owning a specific shard.
 //
-// StartServer() must return quickly, so it should start goroutines
+// StartShardKV() must return quickly, so it should start goroutines
 // for any long-running work.
 //
 func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister, maxraftstate int, gid int, ctrlers []*labrpc.ClientEnd, make_end func(string) *labrpc.ClientEnd) *ShardKV {
@@ -221,8 +220,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	// Go's RPC library to marshall/unmarshall.
 	labgob.Register(Command{})
 	labgob.Register(MigrateCommand{})
-	labgob.Register(ShardState{})
-	labgob.Register(ShardIndexed{})
+	labgob.Register(ShardData{})
 
 	kv := &ShardKV{
 		me: me,
@@ -234,7 +232,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 		applyCh:      make(chan raft.ApplyMsg, 30),
 		reply_chan:   make(map[int]chan bool),
 		lastApplied:  0,
-		states:       make([]ShardState, NShards),
+		states:       make([]ShardData, NShards),
 		gid:          gid,
 		make_end:     make_end,
 		ctrlers:      ctrlers,
@@ -256,6 +254,6 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 
 	go kv.applier()
 	go kv.nextConfigChecker()
-	go kv.sendShardsToOthers()
+	go kv.shardSender()
 	return kv
 }

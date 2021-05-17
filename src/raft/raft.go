@@ -298,7 +298,7 @@ func (rf *Raft) deleteTailLogs(from int) {
 	rf.AssertTrue(from > 0 && from <= rf.lastLogIndex,
 		"from:%d lastLog:%d\n", from, rf.lastLogIndex)
 
-	rf.logger.L(logger.Log1, "term %d delete logs [%d->%d]\n", rf.currentTerm, rf.lastLogIndex, from-1)
+	rf.logger.L(logger.LogModify, "term %d delete logs [%d->%d]\n", rf.currentTerm, rf.lastLogIndex, from-1)
 	rf.logs = append([]LogEntry{}, rf.logs[:from-rf.offset]...)
 	rf.lastLogIndex = from - 1
 	rf.persist()
@@ -308,7 +308,7 @@ func (rf *Raft) deleteTailLogs(from int) {
 func (rf *Raft) appendManyLogs(logs []LogEntry) {
 
 	rf.lastLogIndex += len(logs)
-	rf.logger.L(logger.Log1, "term %d ++%d logs [tail->%d]\n", rf.currentTerm, len(logs), rf.lastLogIndex)
+	rf.logger.L(logger.LogModify, "term %d ++%d logs [tail->%d]\n", rf.currentTerm, len(logs), rf.lastLogIndex)
 	rf.logs = append(rf.logs, logs...)
 	rf.persist()
 }
@@ -316,7 +316,7 @@ func (rf *Raft) appendManyLogs(logs []LogEntry) {
 //hold lock
 func (rf *Raft) appendOneLog(logEntry LogEntry) {
 	rf.lastLogIndex += 1
-	rf.logger.L(logger.Log1, "term %d ++1 log [tail->%d]\n", rf.currentTerm, rf.lastLogIndex)
+	rf.logger.L(logger.LogModify, "term %d ++1 log [tail->%d]\n", rf.currentTerm, rf.lastLogIndex)
 	rf.logs = append(rf.logs, logEntry)
 	rf.persist()
 }
@@ -571,7 +571,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		Command: command,
 	})
 	index = rf.lastLogIndex
-	rf.logger.L(logger.Client, "term %d request of index %d %#v\n", term, index, command)
+	rf.logger.L(logger.Start, "term %d request of index %d %#v\n", term, index, command)
 	rf.mu.Unlock()
 
 	go func() {

@@ -20,7 +20,7 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 	result := kv.doRequest(&request_arg).(*GetReply)
 	reply.Err = result.Err
 	reply.Value = result.Value
-	kv.logger.L(logger.ServerReq, "[%3d--%d] get return result%#v\n",
+	kv.logger.L(logger.ShardKVReq, "[%3d--%d] get return result%#v\n",
 		args.ClientID%1000, args.Seq, reply)
 
 }
@@ -40,7 +40,7 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	case "Append":
 		request_arg.OptType = TYPE_APPEND
 	default:
-		kv.logger.L(logger.ServerReq, "putAppend err type %d from [%3d--%d]\n",
+		kv.logger.L(logger.ShardKVReq, "putAppend err type %d from [%3d--%d]\n",
 			args.Op, args.ClientID%1000, args.Seq)
 	}
 
@@ -48,19 +48,17 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 
 	reply.Err = reply_arg.Err
 
-	kv.logger.L(logger.ServerReq, "[%3d--%d] putAppend return result%#v\n",
+	kv.logger.L(logger.ShardKVReq, "[%3d--%d] putAppend return result%#v\n",
 		args.ClientID%1000, args.Seq, reply)
 }
 
-//todo handler
-func (kv *ShardKV) SendShards(args *SendShardsArgs, reply *SendShardsReply) {
+//handler
+func (kv *ShardKV) Migrate(args *MigrationArgs, reply *MigrationReply) {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
-	mig_shards := make([]int, 0)
-	for _, shardsI := range args.Shards {
-		mig_shards = append(mig_shards, shardsI.ShardIndex)
-	}
-	kv.logger.L(logger.ServerMove, "num %d handle num %d move rpc %v\n", kv.config.Num, args.Num, mig_shards)
+
+	kv.logger.L(logger.ShardKVMigration, "num %d handle num %d move rpc %v\n",
+		kv.config.Num, args.Num, args.ShardsIndexes)
 	reply.Num = kv.config.Num
 	reply.Ok = false
 	if args.Num > kv.config.Num {
@@ -70,7 +68,7 @@ func (kv *ShardKV) SendShards(args *SendShardsArgs, reply *SendShardsReply) {
 		reply.Ok = true
 		return
 	}
-	if kv.isDone(args) {
+	if kv.isMigrationDone(args) {
 		reply.Ok = true
 		return
 	}
@@ -80,10 +78,11 @@ func (kv *ShardKV) SendShards(args *SendShardsArgs, reply *SendShardsReply) {
 	}
 	index, _, isLeader := kv.rf.Start(*command)
 	if !isLeader {
-		kv.logger.L(logger.ServerMove, "move handle not leader\n")
+		kv.logger.L(logger.ShardKVMigration, "move handle not leader\n")
 		return
 	} else {
-		kv.logger.L(logger.ServerMove, "move handle num %d shards %v as leader?\n", args.Num, mig_shards)
+		kv.logger.L(logger.ShardKVMigration,
+			"move handle num %d shards %v as leader?\n", args.Num, args.ShardsIndexes)
 	}
 	wait := kv.getWaitChan(index)
 	kv.mu.Unlock()
@@ -96,21 +95,19 @@ func (kv *ShardKV) SendShards(args *SendShardsArgs, reply *SendShardsReply) {
 
 	kv.mu.Lock()
 	reply.Num = kv.config.Num
-	if args.Num <= kv.config.Num && kv.isDone(args) {
+	if args.Num <= kv.config.Num && kv.isMigrationDone(args) {
 
 		reply.Ok = true
 	}
 
 }
 
-func (kv *ShardKV) isDone(args *SendShardsArgs) bool {
-	shards := make([]int, 0)
-	for _, shardIndexed := range args.Shards {
-		if kv.pendingShards[shardIndexed.ShardIndex] {
+func (kv *ShardKV) isMigrationDone(args *MigrationArgs) bool {
+	for _, shardIndex := range args.ShardsIndexes {
+		if kv.pendingShards[shardIndex] {
 			return false
 		}
-		shards = append(shards, shardIndexed.ShardIndex)
 	}
-	kv.logger.L(logger.ServerMove, "num %d move %v is done yet\n", args.Num, shards)
+	kv.logger.L(logger.ShardKVMigration, "num %d move %v is done yet\n", args.Num, args.ShardsIndexes)
 	return true
 }

@@ -17,17 +17,17 @@ func (kv *ShardKV) isCurrentConfigDone() bool {
 	return true
 }
 
-func newShardState() *ShardState {
-	return &ShardState{
+func newShardState() *ShardData {
+	return &ShardData{
 		KVmap:   make(map[string]string),
 		NextSeq: make(map[int64]int),
 	}
 }
 
-func deepCopyState(dst *ShardState, from *ShardState) {
+func deepCopyState(dst *ShardData, from *ShardData) {
 	*dst = *deepCopyedState(from)
 }
-func deepCopyedState(from *ShardState) *ShardState {
+func deepCopyedState(from *ShardData) *ShardData {
 	dst := newShardState()
 	for k, v := range from.KVmap {
 		dst.KVmap[k] = v
