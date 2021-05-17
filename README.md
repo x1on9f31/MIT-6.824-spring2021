@@ -56,7 +56,7 @@ print_list := []LogTopic{
 
 ## Raft
 
-![image-20210517164909985](../.resource/image-20210517164909985.png)
+![image-20210517164909985](https://github.com/crimson-gao/images/blob/master/image-20210517164909985.png)
 
 ### 消息过滤
 
