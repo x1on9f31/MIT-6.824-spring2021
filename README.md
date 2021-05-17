@@ -1,10 +1,12 @@
 # MIT-6.824-spring2021
-MIT-6.824-spring2021, lab implmentations , includes lab 2A 2B 2C 2D 3A 3B 4A   
-Raft with golang  
+MIT-6.824-spring2021, Raft using golang, includes lab 2A 2B 2C 2D 3A 3B 4A 4B    
+ 
 
 ## Recent
 4A finished just now  
-4B to be finished...  
+4B finished just now  
+all lab has finished !! 
+time to optimize codes...  
 
 ## Usage
 ### Lab2
@@ -29,9 +31,10 @@ cd src/shardkv
 passed over 10k rounds of test in lab2    
 passed over 1k rounds of test in lab3   
 passed over 10k rounds of test in lab4a   
-  
+passed over 50  rounds of test in lab4b
+
 All above test without -race flag, may still have data contention.  
-But I tried run 3B with -race once and passed, so it should be right, I guess so but not promise  
+But I tried run 4B with -race once and passed, so it should be right, I guess so but not promise  
 Good luck to you!  
 
 
