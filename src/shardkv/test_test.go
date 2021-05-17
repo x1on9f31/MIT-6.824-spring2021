@@ -479,7 +479,7 @@ func TestConcurrent3(t *testing.T) {
 
 	var done int32
 	ch := make(chan bool)
-
+	fmt.Println("-------con---------------")
 	ff := func(i int, ck1 *Clerk) {
 		defer func() { ch <- true }()
 		for atomic.LoadInt32(&done) == 0 {
@@ -495,6 +495,7 @@ func TestConcurrent3(t *testing.T) {
 	}
 
 	t0 := time.Now()
+	fmt.Println("-------start config and restart---------------")
 	for time.Since(t0) < 12*time.Second {
 		cfg.join(2)
 		cfg.join(1)
@@ -515,6 +516,7 @@ func TestConcurrent3(t *testing.T) {
 	time.Sleep(2 * time.Second)
 
 	atomic.StoreInt32(&done, 1)
+	fmt.Println("-------wait result---------------")
 	for i := 0; i < n; i++ {
 		<-ch
 	}

@@ -197,9 +197,9 @@ func (sc *ShardCtrler) applier() {
 			v, ok := m.Command.(Command)
 			if !ok {
 				//err
-				return
+			} else {
+				sc.applyCommand(v) //may ignore duplicate cmd
 			}
-			sc.applyCommand(v) //may ignore duplicate cmd
 
 			//sc.logger.L(logger.CtrlerApply, "lastConfigNum %d last configs :%v\n", len(sc.configs)-1, sc.configs[len(sc.configs)-1])
 			if sc.needSnapshot() {

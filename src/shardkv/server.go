@@ -22,7 +22,8 @@ const (
 	TYPE_APPEND
 	TYPE_NEWCONFIG
 	TYPE_MIGRATE
-	NShards = shardctrler.NShards
+	TYPE_NOP = 1000
+	NShards  = shardctrler.NShards
 )
 
 type Command struct {
@@ -255,5 +256,6 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 
 	go kv.applier()
 	go kv.nextConfigChecker()
+	go kv.sendShardsToOthers()
 	return kv
 }

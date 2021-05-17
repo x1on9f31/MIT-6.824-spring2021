@@ -120,8 +120,11 @@ func (rf *Raft) doPersistRaftAndSnap(index, term int, snapshot []byte) {
 	state := rf.getRaftState()
 	rf.persister.SaveStateAndSnapshot(state, snapshot)
 	rf.snapshot = snapshot
-	rf.logger.L(logger.SnapSize, "raft apply snapshot offset %d ,total log %d, size %d,log cap:%d\n",
-		index, rf.lastLogIndex, len(state), cap(rf.logs))
+	rf.logger.L(logger.SnapSize, "raft apply snapshot offset %d ,lastApplied %d,total log %d, size %d,log cap:%d\n",
+		index, rf.lastApplied, rf.lastLogIndex, len(state), cap(rf.logs))
+	if rf.lastApplied != index {
+		rf.logger.L(logger.SnapSize, "last applied not snapshoted %#v\n", rf.logs[rf.lastApplied-rf.offset])
+	}
 }
 
 //hold lock
@@ -568,7 +571,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		Command: command,
 	})
 	index = rf.lastLogIndex
-	rf.logger.L(logger.Client, "term %d request of index %d\n", term, index)
+	rf.logger.L(logger.Client, "term %d request of index %d %#v\n", term, index, command)
 	rf.mu.Unlock()
 
 	go func() {

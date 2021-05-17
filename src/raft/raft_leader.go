@@ -24,7 +24,10 @@ func (rf *Raft) doLeaderThing(term int) {
 		rf.mu.Unlock()
 		return
 	}
-
+	// rf.appendOneLog(LogEntry{
+	// 	Term:    rf.currentTerm,
+	// 	Command: nil,
+	// })
 	heartBeatsTimer := time.NewTimer(HEART_INTERVAL)
 	done := make(chan bool, rf.peerCnt-1)
 	go func() {
