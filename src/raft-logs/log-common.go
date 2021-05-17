@@ -112,7 +112,7 @@ func init() {
 		ShardKVMigration,
 		ShardKVReq,
 		ShardKVStart,
-		CtrlerApply,
+		//CtrlerApply,
 	}
 
 	for _, v := range print_list {
