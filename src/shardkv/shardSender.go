@@ -7,38 +7,41 @@ import (
 )
 
 func (kv *ShardKV) shardSender() {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+
+	timer := time.NewTimer(time.Millisecond * 100)
+	done := make(chan bool)
+	go func() {
+		for !kv.killed() {
+			select {
+			case <-timer.C:
+				kv.senderCond.Signal()
+				timer.Reset(time.Millisecond * 100)
+			case <-done:
+				return
+			}
+		}
+	}()
 
 	for !kv.killed() {
-		kv.mu.Lock()
 
 		if kv.isCurrentConfigDone() {
 			kv.logger.L(logger.ShardKVMigration, "current config num %d done\n",
 				kv.config.Num)
-			kv.mu.Unlock()
-			time.Sleep(time.Millisecond * 50)
+			kv.senderCond.Wait()
 			continue
 		}
 
-		m := make(map[int][]int)
-		recv := make([]int, 0)
-		for shardIndex, isPending := range kv.pendingShards {
-			target_gid := kv.config.Shards[shardIndex]
-			if isPending {
-				if target_gid != kv.gid { //this shard is sending  to others
-					m[target_gid] = append(m[target_gid], shardIndex)
-				} else {
-					recv = append(recv, shardIndex)
-				}
-			}
-		}
-		if len(m) == 0 {
-			kv.logger.L(logger.ShardKVMigration, "num %d waiting %v shards \n", kv.config.Num, recv)
-			kv.mu.Unlock()
-			time.Sleep(time.Millisecond * 50)
+		to_send, to_recv := kv.getSendAndRecvTarget()
+
+		if len(to_send) == 0 {
+			kv.logger.L(logger.ShardKVMigration, "num %d waiting %v shards \n", kv.config.Num, to_recv)
+			kv.senderCond.Wait()
 			continue
 		}
 
-		for g, shardIndexes := range m {
+		for g, shardIndexes := range to_send {
 			kv.logger.L(logger.ShardKVMigration, "num %d sending shards %v to group %d\n",
 				kv.config.Num, shardIndexes, g)
 
@@ -55,10 +58,9 @@ func (kv *ShardKV) shardSender() {
 			go kv.sendToGroup(kv.config.Groups[g], args)
 		}
 
-		kv.mu.Unlock()
-		time.Sleep(time.Millisecond * 30)
+		kv.senderCond.Wait()
 	}
-
+	close(done)
 }
 func (kv *ShardKV) sendToGroup(servers []string, args *MigrationArgs) {
 
@@ -98,4 +100,20 @@ func (kv *ShardKV) afterSendShardsOk(args *MigrationArgs) {
 			"propose migration after send %v shards ok, num %d\n", args.ShardsIndexes, args.Num)
 	}
 
+}
+
+func (kv *ShardKV) getSendAndRecvTarget() (map[int][]int, []int) {
+	send := make(map[int][]int)
+	recv := make([]int, 0)
+	for shardIndex, isPending := range kv.pendingShards {
+		target_gid := kv.config.Shards[shardIndex]
+		if isPending {
+			if target_gid != kv.gid { //this shard is sending  to others
+				send[target_gid] = append(send[target_gid], shardIndex)
+			} else {
+				recv = append(recv, shardIndex)
+			}
+		}
+	}
+	return send, recv
 }

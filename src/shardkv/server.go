@@ -63,7 +63,7 @@ type ShardKV struct {
 
 	logger     logger.TopicLogger
 	reply_chan map[int]chan bool
-
+	senderCond *sync.Cond
 	//snapshot
 	states        []ShardData
 	lastApplied   int
@@ -246,6 +246,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 		make_end:     make_end,
 		ctrlers:      ctrlers,
 	}
+	kv.senderCond = sync.NewCond(&kv.mu)
 	kv.sm = shardctrler.MakeClerk(kv.ctrlers)
 	for i := 0; i < shardctrler.NShards; i++ {
 		kv.states[i] = *newShardState()

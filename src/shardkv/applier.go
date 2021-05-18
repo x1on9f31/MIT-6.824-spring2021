@@ -81,6 +81,7 @@ func (kv *ShardKV) initPending(newConfig *Config) {
 
 		}
 	}
+	kv.senderCond.Signal()
 }
 
 func (kv *ShardKV) decidedShard(shardIndex int, shardData *ShardData) {
