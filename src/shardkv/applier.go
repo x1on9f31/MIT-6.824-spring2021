@@ -25,8 +25,8 @@ func (kv *ShardKV) applyConfig(newConfig *Config) {
 	}
 
 	kv.logger.L(logger.ShardKVConfig,
-		"apply new config num %d :%v\n old :%v\n", newConfig.Num, newConfig,
-		kv.config)
+		"apply new config num %d :%v\n old :%v\n", newConfig.Num, newConfig.Shards,
+		kv.config.Shards)
 
 	kv.initPending(newConfig)
 	kv.config = *newConfig
@@ -109,11 +109,11 @@ func (kv *ShardKV) applier() {
 		m := <-kv.applyCh
 		kv.mu.Lock()
 		if m.SnapshotValid { //snapshot
-			kv.logger.L(logger.ShardKVSnap, "recv Installsnapshot %v %v\n", m.SnapshotIndex, kv.lastApplied)
+			kv.logger.L(logger.ShardKVSnap, "recv Installsnapshot %v,lastApplied %d\n", m.SnapshotIndex, kv.lastApplied)
 			if kv.rf.CondInstallSnapshot(m.SnapshotTerm,
 				m.SnapshotIndex, m.Snapshot) {
 				old_apply := kv.lastApplied
-				kv.logger.L(logger.ShardKVSnap, "decide Installsnapshot %v <- %v\n", m.SnapshotIndex, kv.lastApplied)
+				kv.logger.L(logger.ShardKVSnap, "decide Installsnapshot %v, lastApplied %d\n", m.SnapshotIndex, kv.lastApplied)
 				kv.applyInstallSnapshot(m.Snapshot)
 				for i := old_apply + 1; i <= m.SnapshotIndex; i++ {
 					kv.notify(i)
@@ -126,15 +126,16 @@ func (kv *ShardKV) applier() {
 				kv.logger.L(logger.ShardKVApply, "nop apply %#v\n", m.Command)
 				//panic("not ok assertion in apply!")
 			} else {
-				kv.logger.L(logger.ShardKVApply, "apply index %d key%v num %d type %d   lastApplied %d\n", m.CommandIndex,
-					v.Key, v.Num, v.OptType, kv.lastApplied)
+				kv.logger.L(logger.ShardKVApply, "apply index %d, opt %s key %v, num %d lastApplied %d\n",
+					m.CommandIndex,
+					TYPE_NAME[v.OptType], v.Key, v.Num, kv.lastApplied)
 				kv.applyCommand(v) //may ignore duplicate cmd
 
 			}
 			kv.lastApplied = m.CommandIndex
 			if kv.needSnapshot() {
 				kv.doSnapshotForRaft(m.CommandIndex)
-				kv.logger.L(logger.ShardKVSnapSize, "after snap shot size%d %d\n",
+				kv.logger.L(logger.ShardKVSnapSize, "after snapshot, raft size: %d,snap size: %d\n",
 					kv.persister.RaftStateSize(), kv.persister.SnapshotSize())
 			}
 			kv.notify(m.CommandIndex)
@@ -215,8 +216,8 @@ func (kv *ShardKV) applyInstallSnapshot(snap []byte) {
 		kv.pendingShards = pendingShards
 		kv.config = config
 		kv.states = states
-		kv.logger.L(logger.ShardKVApply, "install snap index %d,config %v\n pending shards %v\n",
-			lastIndex, config, pendingShards)
+		kv.logger.L(logger.ShardKVApply, "install snap index %d, config %v\n pending shards %v\n",
+			lastIndex, config.Shards, pendingShards)
 	}
 
 }
@@ -234,7 +235,7 @@ func (kv *ShardKV) doSnapshotForRaft(index int) {
 	e.Encode(kv.config)
 	e.Encode(kv.states)
 	snap := w.Bytes()
-	kv.logger.L(logger.ShardKVSnap, "do snapshot for raft %v %v,size %d\n",
+	kv.logger.L(logger.ShardKVSnap, "do snapshot for raft to index %v, server lastApplied %v, snap size: %d\n",
 		index, kv.lastApplied, len(snap))
 
 	kv.rf.Snapshot(index, snap)

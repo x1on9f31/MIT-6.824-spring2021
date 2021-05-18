@@ -78,7 +78,7 @@ func (kv *ShardKV) sendToGroup(servers []string, args *MigrationArgs) {
 }
 
 func (kv *ShardKV) afterSendShardsOk(args *MigrationArgs) {
-	kv.logger.L(logger.ShardKVApply, "after send shards ok\n")
+	kv.logger.L(logger.ShardKVApply, "after send %v shards ok\n", args.ShardsIndexes)
 	if kv.config.Num != args.Num {
 		return
 	}
@@ -92,11 +92,10 @@ func (kv *ShardKV) afterSendShardsOk(args *MigrationArgs) {
 	_, _, isLeader := kv.rf.Start(*command)
 
 	if !isLeader {
-		kv.logger.L(logger.ShardKVMigration, "move delete propose not leader\n")
 		return
 	} else {
 		kv.logger.L(logger.ShardKVMigration,
-			"move delete propose num %d shards %v as leader?\n", args.Num, args.ShardsIndexes)
+			"propose migration after send %v shards ok, num %d\n", args.ShardsIndexes, args.Num)
 	}
 
 }

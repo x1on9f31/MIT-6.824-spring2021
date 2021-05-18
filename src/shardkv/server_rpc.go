@@ -40,8 +40,8 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	case "Append":
 		request_arg.OptType = TYPE_APPEND
 	default:
-		kv.logger.L(logger.ShardKVReq, "putAppend err type %d from [%3d--%d]\n",
-			args.Op, args.ClientID%1000, args.Seq)
+		kv.logger.L(logger.ShardKVReq, "[%3d--%d] putAppend err, type %v\n",
+			args.ClientID%1000, args.Seq, args.Op)
 	}
 
 	reply_arg := kv.doRequest(&request_arg).(*PutAppendReply) //wait
@@ -57,8 +57,8 @@ func (kv *ShardKV) Migrate(args *MigrationArgs, reply *MigrationReply) {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 
-	kv.logger.L(logger.ShardKVMigration, "num %d handle num %d move rpc %v\n",
-		kv.config.Num, args.Num, args.ShardsIndexes)
+	kv.logger.L(logger.ShardKVMigration, "recv %v shards, num %d, my num %d\n",
+		args.ShardsIndexes, args.Num, kv.config.Num)
 	reply.Num = kv.config.Num
 	reply.Ok = false
 	if args.Num > kv.config.Num {
@@ -78,11 +78,10 @@ func (kv *ShardKV) Migrate(args *MigrationArgs, reply *MigrationReply) {
 	}
 	index, _, isLeader := kv.rf.Start(*command)
 	if !isLeader {
-		kv.logger.L(logger.ShardKVMigration, "move handle not leader\n")
 		return
 	} else {
 		kv.logger.L(logger.ShardKVMigration,
-			"move handle num %d shards %v as leader?\n", args.Num, args.ShardsIndexes)
+			"propose migration after recv %v shards, num %d\n", args.ShardsIndexes, args.Num)
 	}
 	wait := kv.getWaitChan(index)
 	kv.mu.Unlock()
@@ -108,6 +107,6 @@ func (kv *ShardKV) isMigrationDone(args *MigrationArgs) bool {
 			return false
 		}
 	}
-	kv.logger.L(logger.ShardKVMigration, "num %d move %v is done yet\n", args.Num, args.ShardsIndexes)
+	kv.logger.L(logger.ShardKVMigration, "%v shards num %d not pending any more\n", args.ShardsIndexes, args.Num)
 	return true
 }

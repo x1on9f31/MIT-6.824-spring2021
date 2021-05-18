@@ -17,7 +17,7 @@ func (kv *ShardKV) nextConfigChecker() {
 		kv.mu.Unlock()
 
 		if config := kv.sm.Query(num + 1); config.Num == num+1 {
-			kv.logger.L(logger.ShardKVConfig, "got new config %v old %d\n", config, num)
+			kv.logger.L(logger.ShardKVConfig, "got new config num %d, %v\n", num+1, config.Shards)
 			kv.proposeNewConfig(&config)
 		}
 
@@ -39,7 +39,7 @@ func (kv *ShardKV) proposeNewConfig(config *Config) {
 		if !isLeader {
 			return
 		}
-		kv.logger.L(logger.ShardKVConfig, "propose new config %d as leader?\n", config.Num)
+		kv.logger.L(logger.ShardKVConfig, "propose new config %d\n", config.Num)
 	}
 
 }

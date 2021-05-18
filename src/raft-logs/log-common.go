@@ -121,7 +121,8 @@ func init() {
 }
 
 type TopicLogger struct {
-	Me int
+	Me    int
+	Group int
 }
 
 func (tp *TopicLogger) L(topic LogTopic, format string, a ...interface{}) {
@@ -129,7 +130,12 @@ func (tp *TopicLogger) L(topic LogTopic, format string, a ...interface{}) {
 		time := time.Since(debugStart).Milliseconds()
 		time_seconds := time / 1000
 		time = time % 1000
-		prefix := fmt.Sprintf("%03d'%03d %d S%d ", time_seconds, time, topic, tp.Me)
+		prefix := ""
+		if topic >= ShardKVReq {
+			prefix = fmt.Sprintf("%03d'%03dms G%03d-S%d ", time_seconds, time, tp.Group, tp.Me)
+		} else {
+			prefix = fmt.Sprintf("%03d'%03dms S%d ", time_seconds, time, tp.Me)
+		}
 		format = prefix + format
 		log.Printf(format, a...)
 	}

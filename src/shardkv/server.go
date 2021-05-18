@@ -22,9 +22,17 @@ const (
 	TYPE_APPEND
 	TYPE_NEWCONFIG
 	TYPE_MIGRATE
-	TYPE_NOP = 1000
-	NShards  = shardctrler.NShards
+	NShards = shardctrler.NShards
 )
+
+var TYPE_NAME = [6]string{
+	"ERR",
+	"GET",
+	"PUT",
+	"APPEND",
+	"NEW CONFIG",
+	"MIGRATE",
+}
 
 type Command struct {
 	// Your definitions here.
@@ -120,16 +128,16 @@ func (kv *ShardKV) checkResult(command *Command) (bool, bool, interface{}) {
 }
 
 func printCommand(command *Command) string {
-	return fmt.Sprintf("Key %v type %d num %d Client %d Seq %d",
-		command.Key, command.OptType, command.Num,
-		command.ClientID, command.Seq)
+	return fmt.Sprintf("opt %s Key %v num %d",
+		TYPE_NAME[command.OptType], command.Key, command.Num)
 }
 
 //return reference type
 func (kv *ShardKV) doRequest(command *Command) interface{} {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
-	kv.logger.L(logger.ShardKVReq, "do request args:%s \n", printCommand(command))
+	kv.logger.L(logger.ShardKVReq, "[%3d--%d] do request :%s\n", command.ClientID%1000, command.Seq,
+		printCommand(command))
 
 	if avaliable, ok, res := kv.checkResult(command); !avaliable || ok {
 		return res
@@ -138,12 +146,12 @@ func (kv *ShardKV) doRequest(command *Command) interface{} {
 	index, _, isLeader := kv.rf.Start(*command)
 
 	if !isLeader {
-		kv.logger.L(logger.ShardKVReq, "declined [%3d--%d] for not leader\n",
-			command.ClientID%1000, command.Seq)
+		// kv.logger.L(logger.ShardKVReq, "[%3d--%d] is declined for not leader\n",
+		// 	command.ClientID%1000, command.Seq)
 		return kv.getReplyStruct(command.OptType, ErrWrongLeader)
 	} else {
-		kv.logger.L(logger.ShardKVStart, "start [%3d--%d] as leader?\n",
-			command.ClientID%1000, command.Seq)
+		kv.logger.L(logger.ShardKVStart, "[%3d--%d] propose client command %s\n",
+			command.ClientID%1000, command.Seq, printCommand(command))
 	}
 
 	wait_chan := kv.getWaitChan(index)
@@ -157,13 +165,13 @@ func (kv *ShardKV) doRequest(command *Command) interface{} {
 
 	kv.mu.Lock()
 
-	avaliable, ok, res := kv.checkResult(command)
+	_, ok, res := kv.checkResult(command)
 	if ok {
-		kv.logger.L(logger.ShardKVReq, "[%3d--%d] ok \n",
+		kv.logger.L(logger.ShardKVReq, "[%3d--%d] request ok\n",
 			command.ClientID%1000, command.Seq)
 	} else {
-		kv.logger.L(logger.ShardKVReq, "[%3d--%d] failed applied ava %v\n",
-			command.ClientID%1000, command.Seq, avaliable)
+		kv.logger.L(logger.ShardKVReq, "[%3d--%d] request failed\n",
+			command.ClientID%1000, command.Seq)
 	}
 
 	return res
@@ -225,7 +233,8 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	kv := &ShardKV{
 		me: me,
 		logger: logger.TopicLogger{
-			Me: me + gid%10*100 + 100,
+			Me:    me,
+			Group: gid,
 		},
 		maxraftstate: maxraftstate,
 		persister:    persister,
