@@ -1,6 +1,5 @@
 package shardkv
 
-//todo
 func (kv *ShardKV) isResponsible(shard, num int) bool {
 	return num == kv.config.Num && kv.config.Shards[shard] == kv.gid
 }
@@ -17,7 +16,7 @@ func (kv *ShardKV) isCurrentConfigDone() bool {
 	return true
 }
 
-func newShardState() *ShardData {
+func newEmptyShard() *ShardData {
 	return &ShardData{
 		KVmap:   make(map[string]string),
 		NextSeq: make(map[int64]int),
@@ -28,7 +27,7 @@ func deepCopyState(dst *ShardData, from *ShardData) {
 	*dst = *deepCopyedState(from)
 }
 func deepCopyedState(from *ShardData) *ShardData {
-	dst := newShardState()
+	dst := newEmptyShard()
 	for k, v := range from.KVmap {
 		dst.KVmap[k] = v
 	}

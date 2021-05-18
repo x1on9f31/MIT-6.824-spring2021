@@ -9,20 +9,8 @@ import (
 func (kv *ShardKV) shardSender() {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
-
-	timer := time.NewTimer(time.Millisecond * 100)
 	done := make(chan bool)
-	go func() {
-		for !kv.killed() {
-			select {
-			case <-timer.C:
-				kv.senderCond.Signal()
-				timer.Reset(time.Millisecond * 100)
-			case <-done:
-				return
-			}
-		}
-	}()
+	kv.newTicker(done)
 
 	for !kv.killed() {
 
@@ -40,19 +28,17 @@ func (kv *ShardKV) shardSender() {
 			kv.senderCond.Wait()
 			continue
 		}
-
+		//send shards
 		for g, shardIndexes := range to_send {
 			kv.logger.L(logger.ShardKVMigration, "num %d sending shards %v to group %d\n",
 				kv.config.Num, shardIndexes, g)
-
-			shardDatas := make([]ShardData, 0, len(shardIndexes))
-			for _, index := range shardIndexes {
-				shardDatas = append(shardDatas, *deepCopyedState(&kv.states[index]))
-			}
 			args := &MigrationArgs{
 				Num:           kv.config.Num,
-				ShardDatas:    shardDatas,
+				ShardDatas:    make([]ShardData, 0, len(shardIndexes)),
 				ShardsIndexes: shardIndexes,
+			}
+			for _, index := range shardIndexes {
+				args.ShardDatas = append(args.ShardDatas, *deepCopyedState(&kv.states[index]))
 			}
 
 			go kv.sendToGroup(kv.config.Groups[g], args)
@@ -62,6 +48,7 @@ func (kv *ShardKV) shardSender() {
 	}
 	close(done)
 }
+
 func (kv *ShardKV) sendToGroup(servers []string, args *MigrationArgs) {
 
 	for _, server := range servers {
@@ -116,4 +103,19 @@ func (kv *ShardKV) getSendAndRecvTarget() (map[int][]int, []int) {
 		}
 	}
 	return send, recv
+}
+
+func (kv *ShardKV) newTicker(done chan bool) {
+	timer := time.NewTimer(time.Millisecond * 100)
+	go func() {
+		for !kv.killed() {
+			select {
+			case <-timer.C:
+				kv.senderCond.Signal()
+				timer.Reset(time.Millisecond * 100)
+			case <-done:
+				return
+			}
+		}
+	}()
 }

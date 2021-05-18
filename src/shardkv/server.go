@@ -100,7 +100,7 @@ func (kv *ShardKV) hasResult(clientID int64, seq, shard int) bool {
 	return kv.states[shard].NextSeq[clientID] > seq
 }
 
-func (kv *ShardKV) checkResult(command *Command) (bool, bool, interface{}) {
+func (kv *ShardKV) checkResult(command *Command) (avaliableShard bool, hasResult bool, reply interface{}) {
 
 	shard := key2shard(command.Key)
 
@@ -110,7 +110,10 @@ func (kv *ShardKV) checkResult(command *Command) (bool, bool, interface{}) {
 	if !kv.isAvaiable(shard) {
 		return false, false, kv.getReplyStruct(command.OptType, ErrWrongLeader)
 	}
-	//applied
+
+	//the shard is avaliable  since here
+
+	//check if already applied
 	if kv.hasResult(command.ClientID, command.Seq, shard) {
 		kv.logger.L(logger.ShardKVReq, "[%3d--%d] successed\n",
 			command.ClientID%1000, command.Seq)
@@ -139,7 +142,7 @@ func (kv *ShardKV) doRequest(command *Command) interface{} {
 	kv.logger.L(logger.ShardKVReq, "[%3d--%d] do request :%s\n", command.ClientID%1000, command.Seq,
 		printCommand(command))
 
-	if avaliable, ok, res := kv.checkResult(command); !avaliable || ok {
+	if avaliableShard, has, res := kv.checkResult(command); !avaliableShard || has {
 		return res
 	}
 
@@ -165,8 +168,8 @@ func (kv *ShardKV) doRequest(command *Command) interface{} {
 
 	kv.mu.Lock()
 
-	_, ok, res := kv.checkResult(command)
-	if ok {
+	avaliableShard, has, res := kv.checkResult(command)
+	if avaliableShard && has {
 		kv.logger.L(logger.ShardKVReq, "[%3d--%d] request ok\n",
 			command.ClientID%1000, command.Seq)
 	} else {
