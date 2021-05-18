@@ -30,8 +30,8 @@ cd src/shardkv
 ## Correctness
 Lab 2  : 10k rounds    
 Lab 3  : 1k rounds 
-Lab 4a : 10k rounds
-Lab 4b : 100 rounds (takes much more time and cpu resouces than other tests)  
+Lab 4a : 10k rounds  
+Lab 4b : 700 rounds (takes much more  cpu resouces than other tests)  
 
 
 
